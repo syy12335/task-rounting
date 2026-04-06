@@ -1,37 +1,44 @@
 ﻿# Accutest Task Reference
 
-本文件说明 controller 何时应将请求路由为 `accutest`，以及如何生成稳定的 `task_content`。
+## Definition
 
-## 适用范围
+`accutest` 用于准确性、质量、评分与效果评估。
 
-当本轮目标是评估输出质量、准确性、评分结果或整体效果时，使用 `accutest`。
+## Common Scenarios
 
-典型关注点包括：
+- 执行一次准确性测试
+- 评估输出质量
+- 对结果打分
+- 检查模型表现
 
-- 准确性
-- 质量评分
-- 效果评估
-- benchmark 表现
-- 输出是否符合预期标准
+## Minimal Information Requirements
 
-## 不应使用 `accutest` 的情况
+在生成 `accutest` task 前，controller 至少应明确：
 
-以下情况应回到 `normal`：
+1. 评估对象是什么
+2. 关注维度是准确性、质量还是评分
+3. 当前请求是执行评估，而不是解释历史结果
 
-- 解释最近一次 accutest 的结果
-- 总结质量评分
-- 比较两次 accutest 的结果含义
+## What to Observe First When Information Is Insufficient
 
-## `task_content` 生成原则
+优先级：
 
-1. 明确评估对象。
-2. 明确评估目标。
-3. 明确核心指标或关注点。
-4. 不写实现路径。
-5. 不写结果。
+1. `accutest-task.md` 本身
+2. 最近一次 accutest 或相关评估结果
+3. 与评估对象相关的输入/输出材料
 
-## 推荐模板
+## When It Is Safe to Generate Task
 
-- 针对 `{对象}` 执行精度评估，重点关注 `{关注点}`
-- 对目标输出执行质量评估，重点检查 `{关注点}`
-- 执行精度测试，生成 `{指标}` 结果摘要
+仅当以下条件成立时生成 `accutest` task：
+
+- 当前目标是执行评估
+- 评估对象已明确
+- 核心评估维度已明确
+
+## Task Content Patterns
+
+Preferred patterns：
+
+- 针对当前对象执行准确性评估，重点关注回答质量与评分
+- 对目标输出执行质量评估，重点检查准确性与整体效果
+- 执行准确性测试并生成质量评分摘要

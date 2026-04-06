@@ -1,107 +1,77 @@
-﻿# Controller Skill Index
+﻿# Controller Encyclopedia
 
-本文件是 controller 的任务分类与路由参考。
-在生成本轮任务前，先使用本文件判断请求所属 task 类型，并据此生成 `task_content`。
+本文件是 controller 的知识入口。
 
-## 使用原则
+在每一步决策中，controller 必须结合：
+- 当前 `user_input`
+- recent `rounds`
+- 本 encyclopedia
+来判断：
 
-1. 先判断当前输入是在发起新任务，还是在追问/解释/总结已有结果。
-2. 只有用户明确提出测试或评估诉求时，才进入测试类 task。
-3. 如果请求主要是解释、整理、引导、查看、继续回答，默认使用 `normal`。
-4. `task_content` 只写本轮直接目标，不写完整 planning，不写工具，不写文件路径，不写结果。
+1. 是否还需要补充观察
+2. 若不需要，当前请求属于哪类 `task_type`
+3. 应使用哪个 reference 文件
+4. 当前信息是否足以生成 `task_content`
+5. 若不足，下一步应观察什么
 
-## 任务分类
+---
+
+## I. Global Principles
+
+1. 不要假设信息天然充分。
+2. 生成任务前，先判断是否需要观察。
+3. task type 必须基于当前请求、recent rounds 与 references 判定，不能机械继承上一轮。
+4. 只有在最小信息齐备时才能生成 `task_content`。
+5. 信息不足时优先 `observe`。
+
+---
+
+## II. Task Types
 
 ### `normal`
-
-定位：体验类/解释类/引导类/查阅类任务。
-
-常见触发：
-- 帮我看看最近一次 functest 为什么失败
-- 帮我总结一下这次测试结果
-- 告诉我这个结果是什么意思
-- 这个怎么用
-- 下一步应该怎么做
-
-不应触发：
-- 帮我做一次功能测试
-- 帮我评估模型精度
-- 帮我做压测
-
-`task_content` 写法：
-- 根据最近一次测试结果整理失败原因摘要
-- 解释最近一次测试结果的含义
-- 总结历史任务输出中的关键信息
-- 给出当前场景的使用指导
-
-Reference: `normal-task.md`
+Definition：解释、总结、查阅、指导、持续回应类任务。  
+Reference：`normal-task.md`
 
 ### `functest`
-
-定位：功能测试任务，检查接口/协议/字段/断言/行为是否满足预期。
-
-常见触发：
-- 帮我做一次 anthropic_ver_1 的功能测试
-- 使用昨天的配置再跑一次功能测试
-- 验证这个协议 body 是否符合要求
-- 检查这组断言能不能通过
-
-不应触发：
-- 帮我分析上一次 functest 为什么失败
-- 帮我解释 assert_result.json 的含义
-
-`task_content` 写法：
-- 针对 anthropic_ver_1 执行功能测试，重点检查 headers、body 与 assert
-- 基于现有配置执行功能测试，重点验证协议字段与断言结果
-- 对目标请求执行功能正确性检查，重点关注返回结构与断言是否通过
-
-Reference: `functest-task.md`
+Definition：功能测试类任务。  
+Reference：`functest-task.md`
 
 ### `accutest`
-
-定位：精度/质量/效果评估任务。
-
-常见触发：
-- 帮我评估这个模型回答的准确性
-- 做一次精度测试
-- 给这个效果打分
-- 看一下这版 prompt 的质量表现
-
-不应触发：
-- 帮我解释最近一次 accutest 的结果
-- 帮我看这个指标是什么意思
-
-`task_content` 写法：
-- 针对当前对象执行精度评估，重点关注回答质量与评分结果
-- 对目标输出执行效果评估，重点检查准确性与质量表现
-- 执行精度测试，生成质量评分结果摘要
-
-Reference: `accutest-task.md`
+Definition：准确性/质量评估类任务。  
+Reference：`accutest-task.md`
 
 ### `perftest`
+Definition：性能评估类任务。  
+Reference：`perftest-task.md`
 
-定位：性能测试任务，关注延迟、吞吐、并发、压测表现。
+---
 
-常见触发：
-- 帮我做一次性能测试
-- 测一下这个接口的延迟
-- 做一下压测
-- 看看吞吐和 p95
+## III. Base Decision Order
 
-不应触发：
-- 帮我解释最近一次 perftest 的结果
-- 帮我总结压测报告
+### Step 1：先判断是否仍需 observation
+自检问题：
 
-`task_content` 写法：
-- 针对目标对象执行性能测试，重点关注延迟、吞吐与并发表现
-- 对当前接口执行压测，重点检查 p95 与 qps
-- 执行性能评估，生成核心指标摘要
+- recent rounds 中是否已有足够事实？
+- 对应 task reference 是否已明确？
+- 当前信息是否足以写出稳定 `task_content`？
 
-Reference: `perftest-task.md`
+任一问题答案为否，则优先 `observe`。
 
-## 路由优先级
+### Step 2：若需 observation，优先观察什么
+Observation 优先级：
 
-1. 当前请求是“解释/总结/查阅/指导”，优先 `normal`。
-2. 当前请求明确要求“做测试/做评估/做压测”，进入对应测试类。
-3. 意图不充分时，默认 `normal`。
-4. 不要因为上轮是测试任务就机械延续测试类型。
+1. 最相关 task reference
+2. 最近一次相关任务输出
+3. 最近一次 run 产物
+4. 必要目录结构或文件存在性
+
+### Step 3：信息足够后再判定 `task_type`
+不要先定类型再反向找证据。
+
+### Step 4：读取对应 reference
+利用 reference 判断：
+- 当前信息是否足够
+- 若不足，下一步观察目标是什么
+
+### Step 5：生成 `task_content`
+只有在 reference 要求的最小信息已满足时才能生成 `task_content`。

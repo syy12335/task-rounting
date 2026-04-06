@@ -1,38 +1,54 @@
 ﻿# Normal Task Reference
 
-本文件说明 controller 何时应将请求路由为 `normal`，以及如何为 `normal` 生成稳定的 `task_content`。
+## Definition
 
-## 适用范围
+`normal` 用于解释、总结、查阅、指导和持续回应类任务。
+它不用于重新执行测试或评估。
 
-当本轮目标主要是以下事项时，使用 `normal`：
+## Common Scenarios
 
-- 解释已有结果
-- 总结历史输出
-- 查阅历史任务
-- 给出使用指导
-- 基于现有结果继续回答
+- 解释最近一次测试结果
+- 总结最近几轮任务输出
+- 查阅历史报告并提炼结论
+- 提供使用指导
+- 基于现有上下文继续回答
 
-## 不要误路由为 normal 的情况
+## Minimal Information Requirements
 
-以下情况不应继续使用 `normal`：
+在生成 `normal` task 前，controller 至少应明确：
 
-- 用户明确要求重新执行功能测试
-- 用户明确要求执行精度评估
-- 用户明确要求执行性能压测
+1. 当前目标是解释、总结、查阅还是指导
+2. 回复所依赖的核心上下文
+3. 若是历史追问，至少具备最近一次相关任务结果摘要
 
-## `task_content` 生成原则
+## What to Observe First When Information Is Insufficient
 
-1. 写本轮要做什么，不写整条 workflow。
-2. 写解释/总结/查阅/指导这类直接动作。
-3. 不写面向用户的话。
-4. 不写文件路径。
-5. 不写工具名。
-6. 不写执行结果。
+优先级：
 
-## 推荐模板
+1. 最近一次相关任务结果
+2. 最近一次相关报告或输出文件
+3. 相关历史轮次
 
-- 根据最近一次测试结果整理失败原因摘要
-- 解释最近一次任务结果的含义
-- 总结历史 round 中的关键信息
-- 给出当前场景下的使用指导
-- 根据已有任务结果回答用户当前问题
+## When It Is Safe to Generate Task
+
+仅当以下条件成立时生成 `normal` task：
+
+- 任务目标已明确为解释/总结/查阅/指导之一
+- 已有足够历史事实支撑回复
+- 不再缺少关键文件或关键结果
+
+## Task Content Patterns
+
+Preferred patterns：
+
+- 总结最近一次 functest 失败原因
+- 总结 recent rounds 的关键信息
+- 解释最近一次 accutest 的核心结论
+- 基于现有上下文提供使用指导
+
+Disallowed patterns：
+
+- answer the user
+- take a look and decide later
+- analyze this task
+- handle this task

@@ -1,39 +1,52 @@
 ﻿# Funtest Task Reference
 
-本文件说明 controller 何时应将请求路由为 `functest`，以及如何生成稳定的 `task_content`。
+## Definition
 
-## 适用范围
+`functest` 用于功能测试、协议行为检查、字段校验与断言验证。
 
-当本轮目标是验证功能正确性时，使用 `functest`。
+## Common Scenarios
 
-典型关注点包括：
+- 执行一次功能测试
+- 重新执行功能测试
+- 校验协议是否正确
+- 验证 headers / body / assert
 
-- headers 是否正确
-- body 是否符合协议
-- assert 是否通过
-- 返回结构是否满足要求
-- 接口行为是否符合预期
+## Minimal Information Requirements
 
-## 不应使用 `functest` 的情况
+在生成 `functest` task 前，controller 至少应明确：
 
-以下情况应回到 `normal`：
+1. 测试对象是什么
+2. 相关协议或配置是什么
+3. 核心关注点是 headers、body、assert、response 或 behavior
 
-- 解释上一次 functest 的结果
-- 总结 functest 失败原因
-- 查阅历史 functest 报告
-- 指导用户如何配置 functest
+## What to Observe First When Information Is Insufficient
 
-## `task_content` 生成原则
+优先级：
 
-1. 明确测试对象。
-2. 明确测试目标。
-3. 明确核心关注点。
-4. 不写具体文件路径。
-5. 不写实现细节。
-6. 不写结果。
+1. `functest-task.md` 本身
+2. 协议配置或协议 reference
+3. 最近一次 functest 相关输出
+4. 当前 run 目录下相关文件
 
-## 推荐模板
+## When It Is Safe to Generate Task
 
-- 针对 `{对象}` 执行功能测试，重点检查 `{关注点}`
-- 基于现有配置执行功能测试，重点验证 `{关注点}`
-- 对目标请求执行功能正确性检查，重点关注 `{关注点}`
+仅当以下条件成立时生成 `functest` task：
+
+- 当前请求是执行功能测试，而不是解释结果
+- 测试对象已明确
+- 核心关注点已明确
+- 不再缺少生成任务所需关键上下文
+
+## Task Content Patterns
+
+Preferred patterns：
+
+- 针对 anthropic_ver_1 执行功能测试，重点检查 headers、body 与 assert
+- 基于当前配置执行功能测试，重点验证协议字段与断言结果
+- 对目标请求进行功能正确性检查，重点关注 response 结构与 assertion pass/fail
+
+Disallowed patterns：
+
+- run a test
+- try it once
+- execute a workflow depending on the situation
