@@ -1,11 +1,5 @@
 # task-router-graph
 
-一个用于教学的 Task Router Graph 示例项目，基于 LangGraph，核心流程为：
-
-`route -> execute -> update`
-
-其中 `route` 与 `normal execute` 已通过 LangChain 接入真实 LLM 节点。`route` 节点内部是 controller 的 agent loop（`observe -> ... -> generate_task`）。
-
 ## 目录
 
 - `configs/graph.yaml`: 运行配置
