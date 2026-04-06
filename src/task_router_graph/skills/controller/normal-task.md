@@ -1,54 +1,51 @@
-﻿# Normal Task Reference
+# Normal Task Reference
 
-## Definition
+定位：`normal` 处理的是解释、总结、查阅、引导、继续回答类任务，而不是重新执行测试。
 
-`normal` 用于解释、总结、查阅、指导和持续回应类任务。
-它不用于重新执行测试或评估。
-
-## Common Scenarios
+## 常见情况
 
 - 解释最近一次测试结果
 - 总结最近几轮任务输出
-- 查阅历史报告并提炼结论
-- 提供使用指导
-- 基于现有上下文继续回答
+- 查看历史报告并提炼结论
+- 给出使用指导
+- 根据现有上下文继续回答用户问题
 
-## Minimal Information Requirements
+## 最小信息要求
 
-在生成 `normal` task 前，controller 至少应明确：
+在生成 `normal` 的 `task_content` 前，controller 至少应知道：
 
-1. 当前目标是解释、总结、查阅还是指导
-2. 回复所依赖的核心上下文
-3. 若是历史追问，至少具备最近一次相关任务结果摘要
+1. 当前用户究竟是要解释 / 总结 / 查阅 / 引导中的哪一种
+2. 当前要依赖的核心上下文是什么
+3. 如果用户在追问历史结果，至少要知道最近一次相关任务的结果摘要
 
-## What to Observe First When Information Is Insufficient
+## 信息不足时优先 observe 什么
 
-优先级：
+优先级建议：
 
-1. 最近一次相关任务结果
+1. 最近一次相关 task 结果
 2. 最近一次相关报告或输出文件
-3. 相关历史轮次
+3. normal 场景下的历史 rounds
 
-## When It Is Safe to Generate Task
+## 何时可以 generate_task
 
-仅当以下条件成立时生成 `normal` task：
+当以下条件满足时，可以生成 `normal` task：
 
-- 任务目标已明确为解释/总结/查阅/指导之一
+- 已明确当前任务目标是解释 / 总结 / 查阅 / 引导之一
 - 已有足够历史事实支撑回复
-- 不再缺少关键文件或关键结果
+- 不再需要补充关键文件
 
-## Task Content Patterns
+## `task_content` 写法
 
-Preferred patterns：
+推荐写法：
 
-- 总结最近一次 functest 失败原因
-- 总结 recent rounds 的关键信息
-- 解释最近一次 accutest 的核心结论
-- 基于现有上下文提供使用指导
+- 根据最近一次 functest 结果整理失败原因摘要
+- 总结最近几轮任务输出中的关键信息
+- 解释最近一次 accutest 结果的核心结论
+- 根据已有上下文给出使用指导
 
-Disallowed patterns：
+不推荐写法：
 
-- answer the user
-- take a look and decide later
-- analyze this task
-- handle this task
+- 帮用户回答这个问题
+- 看看情况再说
+- 分析一下
+- 处理这个任务

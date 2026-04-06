@@ -1,44 +1,42 @@
-﻿# Perftest Task Reference
+# Perftest Task Reference
 
-## Definition
+定位：`perftest` 用于延迟、吞吐、并发、压测等性能评估。
 
-`perftest` 用于延迟、吞吐、并发、压测等性能评估。
+## 常见情况
 
-## Common Scenarios
+- 做一次性能测试
+- 测一下延迟
+- 跑压测
+- 看吞吐和 p95
 
-- 执行性能测试
-- 测量延迟
-- 执行压测
-- 查看吞吐与 p95
+## 最小信息要求
 
-## Minimal Information Requirements
-
-在生成 `perftest` task 前，controller 至少应明确：
+生成 `perftest` 的 `task_content` 前，controller 至少应知道：
 
 1. 测试对象是什么
-2. 相关性能维度是什么
-3. 当前请求是执行性能评估，而不是解释历史结果
+2. 当前关注的性能维度是什么
+3. 当前任务确实是性能评估，而不是历史结果解释
 
-## What to Observe First When Information Is Insufficient
+## 信息不足时优先 observe 什么
 
-优先级：
+优先级建议：
 
-1. `perftest-task.md` 本身
-2. 最近一次 perftest 结果
-3. 当前目标对象的性能相关上下文
+1. `perftest-task.md` 自身
+2. 最近一次 perftest 相关结果
+3. 当前目标对象的性能上下文
 
-## When It Is Safe to Generate Task
+## 何时可以 generate_task
 
-仅当以下条件成立时生成 `perftest` task：
+当以下条件满足时，可以生成 `perftest` task：
 
-- 当前请求是性能测试
-- 测试对象已明确
-- 核心性能指标或维度已明确
+- 已明确是性能测试
+- 已明确测试对象
+- 已明确关键指标或性能关注点
 
-## Task Content Patterns
+## `task_content` 写法
 
-Preferred patterns：
+推荐写法：
 
-- 针对目标执行性能测试，重点关注延迟、吞吐与并发
+- 针对目标对象执行性能测试，重点关注延迟、吞吐与并发表现
 - 对当前接口执行压测，重点检查 p95 与 qps
-- 执行性能评估并生成核心指标摘要
+- 执行性能评估，生成核心指标摘要
