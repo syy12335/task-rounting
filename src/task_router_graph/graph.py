@@ -2,14 +2,14 @@
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from .llm import build_chat_model
-from .nodes import execute_node, route_node, update_node
+from .nodes import accutest_node, functest_node, normal_node, perftest_node, route_node, update_node
 from .schema import ControllerAction, Environment, Output, Task, to_dict
 from .utils import read_json, timestamp_tag, write_json
 
@@ -45,12 +45,27 @@ class TaskRouterGraph:
     def _build_graph(self) -> Any:
         builder: StateGraph = StateGraph(GraphState)
         builder.add_node("route", self._route_step)
-        builder.add_node("execute", self._execute_step)
+        builder.add_node("normal", self._normal_step)
+        builder.add_node("functest", self._functest_step)
+        builder.add_node("accutest", self._accutest_step)
+        builder.add_node("perftest", self._perftest_step)
         builder.add_node("update", self._update_step)
 
         builder.add_edge(START, "route")
-        builder.add_edge("route", "execute")
-        builder.add_edge("execute", "update")
+        builder.add_conditional_edges(
+            "route",
+            self._pick_execute_node,
+            {
+                "normal": "normal",
+                "functest": "functest",
+                "accutest": "accutest",
+                "perftest": "perftest",
+            },
+        )
+        builder.add_edge("normal", "update")
+        builder.add_edge("functest", "update")
+        builder.add_edge("accutest", "update")
+        builder.add_edge("perftest", "update")
         builder.add_edge("update", END)
 
         return builder.compile()
@@ -68,14 +83,29 @@ class TaskRouterGraph:
         )
         return {"task": task, "controller_trace": controller_trace}
 
-    def _execute_step(self, state: GraphState) -> GraphState:
-        task, reply = execute_node(
+    def _pick_execute_node(self, state: GraphState) -> Literal["normal", "functest", "accutest", "perftest"]:
+        return state["task"].type
+
+    def _normal_step(self, state: GraphState) -> GraphState:
+        task, reply = normal_node(
             llm=self._llm,
             normal_system=self._normal_system,
             normal_skills_index=self._normal_skills_index,
             environment=state["environment"],
             task=state["task"],
         )
+        return {"task": task, "reply": reply}
+
+    def _functest_step(self, state: GraphState) -> GraphState:
+        task, reply = functest_node(task=state["task"])
+        return {"task": task, "reply": reply}
+
+    def _accutest_step(self, state: GraphState) -> GraphState:
+        task, reply = accutest_node(task=state["task"])
+        return {"task": task, "reply": reply}
+
+    def _perftest_step(self, state: GraphState) -> GraphState:
+        task, reply = perftest_node(task=state["task"])
         return {"task": task, "reply": reply}
 
     def _update_step(self, state: GraphState) -> GraphState:

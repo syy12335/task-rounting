@@ -3,7 +3,13 @@
 from pathlib import Path
 from typing import Any, Callable
 
-from .agents import route_task, run_normal_task
+from .agents import (
+    route_task,
+    run_accutest_task,
+    run_functest_task,
+    run_normal_task,
+    run_perftest_task,
+)
 from .agents.common import build_rounds_context
 from .schema import ControllerAction, Environment, RoundRecord, Task
 
@@ -106,7 +112,7 @@ def route_node(
     return task, controller_trace
 
 
-def execute_node(
+def normal_node(
     *,
     llm: Any,
     normal_system: str,
@@ -114,30 +120,40 @@ def execute_node(
     environment: Environment,
     task: Task,
 ) -> tuple[Task, str]:
-    if task.type == "normal":
-        # normal 任务走 normal-agent，使用 normal skills index 做约束。
-        rounds_context = build_rounds_context(environment.rounds)
-        result = run_normal_task(
-            llm=llm,
-            system_prompt=normal_system,
-            task_content=task.content,
-            rounds=rounds_context,
-            normal_skills_index=normal_skills_index,
-        )
-        task.status = result["task_status"]
-        task.result = result["task_result"]
-        reply = result["reply"]
-        return task, reply
-
-    fixed_results = {
-        "functest": ("functest 已完成（示例执行）", "[functest] 已完成（示例断言）"),
-        "accutest": ("accutest 已完成（示例指标）", "[accutest] 示例评分：0.83"),
-        "perftest": ("perftest 已完成（示例指标）", "[perftest] 示例 p95：210ms，qps：48"),
-    }
-    task_result, reply = fixed_results[task.type]
-    task.status = "done"
-    task.result = task_result
+    # normal 任务走 normal-agent，使用 normal skills index 做约束。
+    rounds_context = build_rounds_context(environment.rounds)
+    result = run_normal_task(
+        llm=llm,
+        system_prompt=normal_system,
+        task_content=task.content,
+        rounds=rounds_context,
+        normal_skills_index=normal_skills_index,
+    )
+    task.status = result["task_status"]
+    task.result = result["task_result"]
+    reply = result["reply"]
     return task, reply
+
+
+def functest_node(*, task: Task) -> tuple[Task, str]:
+    result = run_functest_task(task_content=task.content)
+    task.status = result["task_status"]
+    task.result = result["task_result"]
+    return task, result["reply"]
+
+
+def accutest_node(*, task: Task) -> tuple[Task, str]:
+    result = run_accutest_task(task_content=task.content)
+    task.status = result["task_status"]
+    task.result = result["task_result"]
+    return task, result["reply"]
+
+
+def perftest_node(*, task: Task) -> tuple[Task, str]:
+    result = run_perftest_task(task_content=task.content)
+    task.status = result["task_status"]
+    task.result = result["task_result"]
+    return task, result["reply"]
 
 
 def update_node(
