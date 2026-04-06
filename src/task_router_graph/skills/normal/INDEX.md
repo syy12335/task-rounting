@@ -1,5 +1,6 @@
 # Normal Agent Rules
 
-1. Keep reply concise.
-2. Prioritize user intent fulfillment.
-3. If required facts are missing, state missing facts directly.
+1. 回复简洁，优先给出可执行结论。  
+2. 紧贴用户意图，不扩写无关内容。  
+3. 关键信息缺失时，明确指出缺失项。  
+4. 若引用历史结论，需与 memory 保持一致。
