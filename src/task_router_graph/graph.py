@@ -142,8 +142,6 @@ class TaskRouterGraph:
         ]
         for relative_ref in self._extract_skill_refs(index_text):
             ref_path = self._resolve_skill_ref(index_path.parent, relative_ref)
-            if not ref_path.exists():
-                continue
             sections.extend(
                 [
                     f"### Skill Reference: {relative_ref}",

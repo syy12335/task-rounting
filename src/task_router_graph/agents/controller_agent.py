@@ -30,6 +30,7 @@ class ControllerAgent:
 
         observations: list[dict[str, Any]] = []
 
+        # 按 system 约束进行多步决策：先 observe，信息足够后 generate_task。
         for step in range(1, self.max_steps + 1):
             response = self.llm.invoke(
                 [
@@ -52,6 +53,7 @@ class ControllerAgent:
 
             action_kind = str(action.get("action_kind", "")).strip()
             if action_kind == "generate_task":
+                # 将本轮 observe 轨迹附加到输出，供上层写入 environment。
                 action["controller_trace"] = observations
                 return action
 

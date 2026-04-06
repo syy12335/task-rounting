@@ -8,12 +8,8 @@ from .agents.common import build_rounds_context
 from .schema import ControllerAction, Environment, RoundRecord, Task
 
 
-def _latest_run_dir(run_root: Path) -> Path | None:
-    if not run_root.exists():
-        return None
+def _latest_run_dir(run_root: Path) -> Path:
     candidates = [p for p in run_root.iterdir() if p.is_dir() and p.name.startswith("run_")]
-    if not candidates:
-        return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
@@ -21,8 +17,6 @@ def _resolve_observe_path(*, workspace_root: Path, run_root: Path, raw_path: str
     normalized = raw_path.strip()
     if normalized.startswith("var/runs/latest"):
         latest = _latest_run_dir(run_root)
-        if latest is None:
-            raise FileNotFoundError("latest run directory not found")
         suffix = normalized[len("var/runs/latest") :].lstrip("/\\")
         return latest / suffix
 
@@ -32,42 +26,23 @@ def _resolve_observe_path(*, workspace_root: Path, run_root: Path, raw_path: str
     return (workspace_root / normalized).resolve()
 
 
-def _tool_read(*, workspace_root: Path, run_root: Path, path: str = "") -> str:
-    if not path:
-        return "[read] missing path"
-    try:
-        target = _resolve_observe_path(workspace_root=workspace_root, run_root=run_root, raw_path=path)
-    except Exception as exc:
-        return f"[read] invalid path: {exc}"
-
-    if not target.exists():
-        return f"[read] path not found: {target}"
-
+def _tool_read(*, workspace_root: Path, run_root: Path, path: str) -> str:
+    target = _resolve_observe_path(workspace_root=workspace_root, run_root=run_root, raw_path=path)
     if target.is_dir():
         entries = sorted(item.name for item in target.iterdir())
         return "\n".join(entries[:200])
-
-    text = target.read_text(encoding="utf-8", errors="replace")
+    text = target.read_text(encoding="utf-8")
     return text[:8000]
 
 
-def _tool_ls(*, workspace_root: Path, run_root: Path, path: str = "") -> str:
-    raw = path or "."
-    try:
-        target = _resolve_observe_path(workspace_root=workspace_root, run_root=run_root, raw_path=raw)
-    except Exception as exc:
-        return f"[ls] invalid path: {exc}"
-
-    if not target.exists():
-        return f"[ls] path not found: {target}"
-    if not target.is_dir():
-        return f"[ls] not a directory: {target}"
-
+def _tool_ls(*, workspace_root: Path, run_root: Path, path: str) -> str:
+    target = _resolve_observe_path(workspace_root=workspace_root, run_root=run_root, raw_path=path)
     entries = sorted(item.name for item in target.iterdir())
     return "\n".join(entries[:200])
 
 
 def _build_observe_tools(*, workspace_root: Path, run_root: Path) -> dict[str, Callable[..., Any]]:
+    # 小场景先收敛为 read/ls 两个观察工具，避免动作空间过大。
     return {
         "read": lambda **kwargs: _tool_read(workspace_root=workspace_root, run_root=run_root, **kwargs),
         "ls": lambda **kwargs: _tool_ls(workspace_root=workspace_root, run_root=run_root, **kwargs),
@@ -75,6 +50,7 @@ def _build_observe_tools(*, workspace_root: Path, run_root: Path) -> dict[str, C
 
 
 def _build_controller_trace(route_result: dict[str, Any]) -> list[ControllerAction]:
+    # 先写入 observe 轨迹，再补一条最终 generate_task 动作。
     trace: list[ControllerAction] = []
 
     for item in route_result.get("controller_trace", []):
@@ -111,6 +87,7 @@ def route_node(
     run_root: Path,
     max_steps: int,
 ) -> tuple[Task, list[ControllerAction]]:
+    # 将 rounds 压缩为模型可消费的上下文，并执行 controller agent loop。
     rounds_context = build_rounds_context(environment.rounds)
     observe_tools = _build_observe_tools(workspace_root=workspace_root, run_root=run_root)
 
@@ -138,6 +115,7 @@ def execute_node(
     task: Task,
 ) -> tuple[Task, str]:
     if task.type == "normal":
+        # normal 任务走 normal-agent，使用 normal skills index 做约束。
         rounds_context = build_rounds_context(environment.rounds)
         result = run_normal_task(
             llm=llm,
@@ -146,39 +124,20 @@ def execute_node(
             rounds=rounds_context,
             normal_skills_index=normal_skills_index,
         )
-        reply = result.get("reply", "").strip()
-        status = result.get("task_status", "").strip()
-        task_result = result.get("task_result", "").strip()
-
-        if status not in {"done", "failed"}:
-            status = "failed"
-        if not task_result:
-            task_result = "normal task returned empty task_result"
-        if not reply:
-            reply = "本轮 normal 任务执行完成，但回复内容为空。"
-
-        task.status = status
-        task.result = task_result
+        task.status = result["task_status"]
+        task.result = result["task_result"]
+        reply = result["reply"]
         return task, reply
 
-    if task.type == "functest":
-        task.status = "done"
-        task.result = "functest completed (mocked)"
-        return task, "[functest] completed with mocked assertions"
-
-    if task.type == "accutest":
-        task.status = "done"
-        task.result = "accutest completed (placeholder metrics)"
-        return task, "[accutest] placeholder score: 0.83"
-
-    if task.type == "perftest":
-        task.status = "done"
-        task.result = "perftest completed (placeholder metrics)"
-        return task, "[perftest] placeholder p95: 210ms, qps: 48"
-
-    task.status = "failed"
-    task.result = "unsupported task type"
-    return task, "unsupported task type"
+    fixed_results = {
+        "functest": ("functest 已完成（示例执行）", "[functest] 已完成（示例断言）"),
+        "accutest": ("accutest 已完成（示例指标）", "[accutest] 示例评分：0.83"),
+        "perftest": ("perftest 已完成（示例指标）", "[perftest] 示例 p95：210ms，qps：48"),
+    }
+    task_result, reply = fixed_results[task.type]
+    task.status = "done"
+    task.result = task_result
+    return task, reply
 
 
 def update_node(
@@ -188,6 +147,7 @@ def update_node(
     task: Task,
     reply: str,
 ) -> Environment:
+    # 每轮持久化 controller_trace + task + reply，供下一轮继续观察。
     environment.rounds.append(
         RoundRecord(
             round=len(environment.rounds) + 1,

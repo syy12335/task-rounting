@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 
@@ -22,18 +21,7 @@ def extract_text(content: Any) -> str:
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            return payload
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        raise ValueError("Model output is not a JSON object")
-
-    payload = json.loads(match.group(0))
+    payload = json.loads(text)
     if not isinstance(payload, dict):
         raise ValueError("Model output JSON is not an object")
     return payload
