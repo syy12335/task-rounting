@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -8,7 +8,6 @@ import yaml
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from .agents.common import build_round_records_payload
 from .llm import build_chat_model
 from .nodes import accutest_node, functest_node, normal_node, perftest_node, route_node, update_node
 from .schema import ControllerAction, Environment, Output, Task, to_dict
@@ -22,6 +21,8 @@ class GraphState(TypedDict, total=False):
     controller_trace: list[ControllerAction]
     task: Task
     reply: str
+    run_id: str
+    run_dir: str
 
 
 class TaskRouterGraph:
@@ -45,6 +46,7 @@ class TaskRouterGraph:
 
     def _build_graph(self) -> Any:
         builder: StateGraph = StateGraph(GraphState)
+        builder.add_node("init", self._init_step)
         builder.add_node("route", self._route_step)
         builder.add_node("normal", self._normal_step)
         builder.add_node("functest", self._functest_step)
@@ -52,7 +54,8 @@ class TaskRouterGraph:
         builder.add_node("perftest", self._perftest_step)
         builder.add_node("update", self._update_step)
 
-        builder.add_edge(START, "route")
+        builder.add_edge(START, "init")
+        builder.add_edge("init", "route")
         builder.add_conditional_edges(
             "route",
             self._pick_execute_node,
@@ -70,6 +73,11 @@ class TaskRouterGraph:
         builder.add_edge("update", END)
 
         return builder.compile()
+
+    def _init_step(self, state: GraphState) -> GraphState:
+        run_id = timestamp_tag()
+        run_dir = self._prepare_run_dir(run_id=run_id)
+        return {"run_id": run_id, "run_dir": str(run_dir)}
 
     def _route_step(self, state: GraphState) -> GraphState:
         task, controller_trace = route_node(
@@ -131,7 +139,7 @@ class TaskRouterGraph:
         task = result_state["task"]
         reply = result_state["reply"]
 
-        run_dir = self._prepare_run_dir()
+        run_dir = Path(result_state["run_dir"])
         output = Output(
             case_id=case_id,
             task_type=task.type,
@@ -141,22 +149,20 @@ class TaskRouterGraph:
             run_dir=str(run_dir.relative_to(self.root)),
         )
 
-        write_json(run_dir / "input.json", {"case_id": case_id, "user_input": user_input})
-        write_json(run_dir / "rounds.json", build_round_records_payload(env.rounds))
-        write_json(run_dir / "tasks.json", [to_dict(round_item.task) for round_item in env.rounds])
-        write_json(run_dir / "output.json", to_dict(output))
-
-        return {
+        result_payload = {
             "environment": to_dict(env),
             "output": to_dict(output),
         }
+        write_json(run_dir / "result.json", result_payload)
+
+        return result_payload
 
     def run_case(self, case_path: str | Path) -> dict:
         case = read_json(Path(case_path))
         return self.run(case_id=case["case_id"], user_input=case["user_input"])
 
-    def _prepare_run_dir(self) -> Path:
-        run_dir = self._run_root / f"run_{timestamp_tag()}"
+    def _prepare_run_dir(self, *, run_id: str) -> Path:
+        run_dir = self._run_root / f"run_{run_id}"
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
 
