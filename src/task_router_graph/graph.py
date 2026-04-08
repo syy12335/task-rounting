@@ -191,7 +191,7 @@ class TaskRouterGraph:
             "output": to_dict(output),
         }
 
-        write_json(run_dir / "result.json", result_payload)
+        write_json(run_dir / "environment.json", environment_payload)
         return result_payload
 
     def run_case(self, case_path: str | Path) -> dict:
