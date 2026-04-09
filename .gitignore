@@ -16,3 +16,4 @@ var/logs/*.log
 hf-cache
 model-cache
 *.log
+var/sglang.pid

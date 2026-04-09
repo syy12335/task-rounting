@@ -1,6 +1,6 @@
 model:
   # 默认 provider；可用环境变量 MODEL_PROVIDER 覆盖。
-  provider: aliyun
+  provider: sglang
   provider_env: MODEL_PROVIDER
   temperature: 0
 
