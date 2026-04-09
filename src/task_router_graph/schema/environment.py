@@ -25,12 +25,16 @@ class Environment:
     def __post_init__(self) -> None:
         # Keep cur_round in sync with rounds when the object is created.
         self.cur_round = self._infer_cur_round()
+        self._assert_round_consistency()
 
     def start_round(self, *, user_input: str) -> RoundRecord:
-        round_item = RoundRecord(round_id=len(self.rounds) + 1, user_input=user_input, tasks=[])
+        # Use max(round_id)+1 instead of len+1 so manual edits / gaps do not break id monotonicity.
+        next_round_id = self._next_round_id()
+        round_item = RoundRecord(round_id=next_round_id, user_input=user_input, tasks=[])
         self.rounds.append(round_item)
         self.cur_round = round_item.round_id
         self.updated_at = _now_iso()
+        self._assert_round_consistency()
         return round_item
 
     def add_task(
@@ -59,10 +63,16 @@ class Environment:
             reply=reply,
         )
         round_item.tasks.append(record)
+
+        # When tasks are appended, round pointer should always point to that round.
+        self.cur_round = round_item.round_id
         self.updated_at = _now_iso()
+        self._assert_round_consistency()
         return record
 
     def show_environment(self, *, show_trace: bool = False) -> str:
+        self._assert_round_consistency()
+
         # Human-readable dump.
         total_task_count = sum(len(round_item.tasks) for round_item in self.rounds)
         lines: list[str] = [
@@ -112,6 +122,8 @@ class Environment:
         include_reply: bool = True,
         include_trace: bool = False,
     ) -> dict[str, Any]:
+        self._assert_round_consistency()
+
         # Default read view for AI: cur_round + flattened task items.
         tasks_payload: list[dict[str, object]] = []
 
@@ -140,6 +152,8 @@ class Environment:
         }
 
     def build_rounds_view(self, *, include_trace: bool = True) -> list[dict[str, object]]:
+        self._assert_round_consistency()
+
         payload: list[dict[str, object]] = []
         for round_item in self.rounds:
             tasks_payload: list[dict[str, object]] = []
@@ -163,6 +177,8 @@ class Environment:
         return payload
 
     def to_dict(self, *, include_trace: bool = True) -> dict[str, Any]:
+        self._assert_round_consistency()
+
         return {
             "rounds": self.build_rounds_view(include_trace=include_trace),
             "cur_round": self.cur_round,
@@ -172,7 +188,20 @@ class Environment:
     def _infer_cur_round(self) -> int:
         if not self.rounds:
             return 0
-        return self.rounds[-1].round_id
+        # Use max round_id instead of list tail to avoid order-sensitive inconsistencies.
+        return max(round_item.round_id for round_item in self.rounds)
+
+    def _next_round_id(self) -> int:
+        return self._infer_cur_round() + 1
+
+    def _assert_round_consistency(self) -> None:
+        inferred = self._infer_cur_round()
+        if self.cur_round != inferred:
+            round_ids = [round_item.round_id for round_item in self.rounds]
+            raise ValueError(
+                "environment round pointer mismatch: "
+                f"cur_round={self.cur_round}, inferred={inferred}, round_ids={round_ids}"
+            )
 
     def _get_round_or_raise(self, round_id: int) -> RoundRecord:
         for round_item in self.rounds:
