@@ -27,6 +27,7 @@ class ControllerAgent:
         tasks: dict[str, Any],
         skills_index: str,
         observe_tools: dict[str, Callable[..., Any]],
+        invoke_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         rendered_system_prompt = self._render_system_prompt(
             user_input=user_input,
@@ -39,6 +40,12 @@ class ControllerAgent:
 
         # 按 system 约束进行多步决策：先 observe，信息足够后 generate_task。
         for step in range(1, self.max_steps + 1):
+            step_invoke_config = _merge_invoke_config(
+                invoke_config,
+                run_name="task-router.controller.llm_step",
+                tags=["task-router", "controller", f"controller-step:{step}"],
+                metadata={"controller_step": step},
+            )
             response = llm.invoke(
                 [
                     SystemMessage(content=rendered_system_prompt),
@@ -52,7 +59,8 @@ class ControllerAgent:
                             indent=2,
                         )
                     ),
-                ]
+                ],
+                config=step_invoke_config,
             )
 
             text = extract_text(response.content if hasattr(response, "content") else str(response))
@@ -132,6 +140,38 @@ def _replace_last(text: str, old: str, new: str) -> str:
     return head + new + tail
 
 
+def _merge_invoke_config(
+    base_config: dict[str, Any] | None,
+    *,
+    run_name: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = dict(base_config or {})
+
+    if run_name:
+        config["run_name"] = run_name
+
+    if tags:
+        existing_tags = config.get("tags", [])
+        if not isinstance(existing_tags, list):
+            existing_tags = []
+        merged_tags: list[str] = []
+        for item in list(existing_tags) + tags:
+            value = str(item).strip()
+            if value and value not in merged_tags:
+                merged_tags.append(value)
+        config["tags"] = merged_tags
+
+    if metadata:
+        existing_metadata = config.get("metadata", {})
+        if not isinstance(existing_metadata, dict):
+            existing_metadata = {}
+        config["metadata"] = {**existing_metadata, **metadata}
+
+    return config
+
+
 def route_task(
     *,
     llm: Any,
@@ -141,10 +181,12 @@ def route_task(
     skills_index: str,
     observe_tools: dict[str, Callable[..., Any]],
     max_steps: int = 3,
+    invoke_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return ControllerAgent(llm=llm, system_prompt=system_prompt, max_steps=max_steps).run(
         user_input=user_input,
         tasks=tasks,
         skills_index=skills_index,
         observe_tools=observe_tools,
+        invoke_config=invoke_config,
     )

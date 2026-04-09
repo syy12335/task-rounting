@@ -111,6 +111,7 @@ class TaskRouterGraph:
             user_input=state["user_input"],
             workspace_root=self.root,
             max_steps=self._max_controller_steps,
+            invoke_config=self._build_llm_invoke_config(state=state, node="route"),
         )
         return {
             "task": task,
@@ -130,6 +131,7 @@ class TaskRouterGraph:
             normal_skills_index=self._normal_skills_index,
             environment=state["environment"],
             task=state["task"],
+            invoke_config=self._build_llm_invoke_config(state=state, node="normal"),
         )
         return {"task": task, "reply": reply}
 
@@ -166,13 +168,46 @@ class TaskRouterGraph:
             return "end"
         return "route"
 
+    def _build_llm_invoke_config(self, *, state: GraphState, node: str) -> dict[str, Any]:
+        tags = ["task-router", "llm", f"node:{node}"]
+        metadata: dict[str, Any] = {"node": node}
+
+        case_id = state.get("case_id")
+        if case_id is not None:
+            metadata["case_id"] = str(case_id)
+
+        run_id = state.get("run_id")
+        if run_id is not None:
+            metadata["run_id"] = str(run_id)
+
+        round_id = state.get("round_id")
+        if round_id is not None:
+            metadata["round_id"] = int(round_id)
+
+        task_turn = state.get("task_turn")
+        if task_turn is not None:
+            metadata["task_turn"] = int(task_turn)
+
+        return {
+            "run_name": f"task-router.{node}",
+            "tags": tags,
+            "metadata": metadata,
+        }
+
     def run(self, *, case_id: str, user_input: str, environment: Environment | None = None) -> dict:
         initial_state: GraphState = {
             "case_id": case_id,
             "user_input": user_input,
             "environment": environment or Environment(),
         }
-        result_state = self._compiled_graph.invoke(initial_state)
+        result_state = self._compiled_graph.invoke(
+            initial_state,
+            config={
+                "run_name": "task-router.graph",
+                "tags": ["task-router", "graph"],
+                "metadata": {"case_id": case_id},
+            },
+        )
 
         env = result_state["environment"]
         task = result_state["task"]

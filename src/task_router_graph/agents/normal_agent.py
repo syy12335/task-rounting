@@ -19,6 +19,7 @@ class NormalAgent:
         task_content: str,
         tasks: dict[str, Any],
         normal_skills_index: str,
+        invoke_config: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         rendered_system_prompt = self._render_system_prompt(
             task_content=task_content,
@@ -31,7 +32,12 @@ class NormalAgent:
             [
                 SystemMessage(content=rendered_system_prompt),
                 HumanMessage(content="请只输出一个合法 JSON 对象，不要输出解释或 Markdown。"),
-            ]
+            ],
+            config=_merge_invoke_config(
+                invoke_config,
+                run_name="task-router.normal.llm",
+                tags=["task-router", "normal"],
+            ),
         )
         text = extract_text(response.content if hasattr(response, "content") else str(response))
         payload = parse_json_object(text)
@@ -68,6 +74,38 @@ def _replace_last(text: str, old: str, new: str) -> str:
     return head + new + tail
 
 
+def _merge_invoke_config(
+    base_config: dict[str, Any] | None,
+    *,
+    run_name: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = dict(base_config or {})
+
+    if run_name:
+        config["run_name"] = run_name
+
+    if tags:
+        existing_tags = config.get("tags", [])
+        if not isinstance(existing_tags, list):
+            existing_tags = []
+        merged_tags: list[str] = []
+        for item in list(existing_tags) + tags:
+            value = str(item).strip()
+            if value and value not in merged_tags:
+                merged_tags.append(value)
+        config["tags"] = merged_tags
+
+    if metadata:
+        existing_metadata = config.get("metadata", {})
+        if not isinstance(existing_metadata, dict):
+            existing_metadata = {}
+        config["metadata"] = {**existing_metadata, **metadata}
+
+    return config
+
+
 def run_normal_task(
     *,
     llm: Any,
@@ -75,9 +113,11 @@ def run_normal_task(
     task_content: str,
     tasks: dict[str, Any],
     normal_skills_index: str,
+    invoke_config: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     return NormalAgent(llm=llm, system_prompt=system_prompt).run(
         task_content=task_content,
         tasks=tasks,
         normal_skills_index=normal_skills_index,
+        invoke_config=invoke_config,
     )

@@ -513,6 +513,7 @@ def route_node(
     user_input: str,
     workspace_root: Path,
     max_steps: int,
+    invoke_config: dict[str, Any] | None = None,
 ) -> tuple[Task, list[ControllerAction]]:
     tasks_context = environment.build_observation_view(
         task_limit=5,
@@ -532,6 +533,7 @@ def route_node(
             skills_index=controller_skills_index,
             observe_tools=observe_tools,
             max_steps=max_steps,
+            invoke_config=invoke_config,
         )
     except ControllerRouteError as exc:
         task = _build_route_failed_task(user_input=user_input, reason=str(exc))
@@ -578,6 +580,7 @@ def normal_node(
     normal_skills_index: str,
     environment: Environment,
     task: Task,
+    invoke_config: dict[str, Any] | None = None,
 ) -> tuple[Task, str]:
     skipped = _try_skip_execute(task, stage="normal")
     if skipped is not None:
@@ -596,6 +599,7 @@ def normal_node(
         task_content=task.content,
         tasks=tasks_context,
         normal_skills_index=normal_skills_index,
+        invoke_config=invoke_config,
     )
     task.status = result["task_status"]
     task.result = result["task_result"]
