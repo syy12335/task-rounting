@@ -9,14 +9,46 @@ def build_chat_model(config: dict[str, Any]) -> Any:
     from langchain_openai import ChatOpenAI
 
     model_cfg = config["model"]
-    api_key_env = model_cfg["api_key_env"]
+
+    providers = model_cfg.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        raise ValueError("model.providers must be a non-empty mapping")
+
+    provider_env = str(model_cfg.get("provider_env", "MODEL_PROVIDER"))
+    default_provider = str(model_cfg.get("provider", "")).strip()
+    selected_provider = os.getenv(provider_env, default_provider).strip()
+    if not selected_provider:
+        raise ValueError(
+            "No provider selected. Configure model.provider or set env "
+            f"{provider_env}."
+        )
+
+    provider_cfg = providers.get(selected_provider)
+    if not isinstance(provider_cfg, dict):
+        supported = ", ".join(sorted(str(k) for k in providers.keys()))
+        raise ValueError(
+            f"Unknown model provider {selected_provider}. "
+            f"Supported providers: {supported}"
+        )
+
+    api_key_env = str(provider_cfg.get("api_key_env", "")).strip()
+    if not api_key_env:
+        raise ValueError(f"Provider {selected_provider} missing api_key_env")
+
     api_key = os.getenv(api_key_env)
     if not api_key:
         raise ValueError(f"Missing required environment variable: {api_key_env}")
 
+    model_name = str(provider_cfg.get("name", "")).strip()
+    base_url = str(provider_cfg.get("base_url", "")).strip()
+    if not model_name or not base_url:
+        raise ValueError(f"Provider {selected_provider} must define name and base_url")
+
+    temperature = float(model_cfg.get("temperature", provider_cfg.get("temperature", 0)))
+
     return ChatOpenAI(
-        model=model_cfg["name"],
-        base_url=model_cfg["base_url"],
+        model=model_name,
+        base_url=base_url,
         api_key=api_key,
-        temperature=float(model_cfg.get("temperature", 0)),
+        temperature=temperature,
     )

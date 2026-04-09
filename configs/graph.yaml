@@ -1,8 +1,19 @@
 model:
-  provider: qwen_cloud
-  name: qwen-plus
-  api_key_env: API_KEY_Qwen
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # 默认 provider；可用环境变量 MODEL_PROVIDER 覆盖。
+  provider: aliyun
+  provider_env: MODEL_PROVIDER
+  temperature: 0
+
+  providers:
+    aliyun:
+      name: qwen-plus
+      api_key_env: API_KEY_Qwen
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+    sglang:
+      name: qwen35-4b
+      api_key_env: SGLANG_API_KEY
+      base_url: http://127.0.0.1:30000/v1
 
 paths:
   cases_dir: data/cases
