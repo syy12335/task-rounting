@@ -14,11 +14,11 @@
 
 ## 失败重试输入（硬规则）
 
-当上一 task 失败时，`TASKS_JSON` 会额外提供：
+当需要基于上一失败任务纠偏时，必须通过 observe 工具读取：
 
-- `previous_failed_track`：上一失败 task 的完整 track（包含 controller + 执行 agent）
+- `previous_failed_track {}`：返回上一失败 task 的完整 track（包含 controller + 执行 agent）
 
-你必须先阅读 `previous_failed_track`，再决定下一步动作，避免重复失败路径。
+不得假设该信息已注入 `TASKS_JSON`；必须显式调用工具获取。
 
 ## `task_content` 语义（核心定义）
 
@@ -53,6 +53,7 @@ controller 阶段不要求补齐：
 - `latest_run_snapshot`：`{"task_type":"normal|functest|accutest|perftest(可选)","include_trace":false}`
 - `recent_tasks`：`{"limit":5,"task_type":"...","status":"done|failed","include_trace":false}`
 - `demo_lookup`：`{"key":"normal.latest_summary"}`（读取 mock demo 数据）
+- `previous_failed_track`：`{}`（仅用于失败重试时读取上一失败轨迹）
 
 ## Observe 决策顺序（硬规则）
 
@@ -64,6 +65,7 @@ controller 阶段不要求补齐：
 
 2. 如果缺的是外部环境事实（历史 run、报告、用户明确提到的文件、某个具体产物）：
    - 优先使用 `latest_run_snapshot` / `recent_tasks`。
+   - 若是失败重试，先调用 `previous_failed_track {}`。
    - 仅在工具结果仍不足且路径已明确时，才允许 `read` / `ls` 文件系统。
 
 3. 如果 task_type 明确且对象明确，且请求不显式依赖外部环境事实：
@@ -100,6 +102,11 @@ controller 阶段不要求补齐：
 
 - 当历史 run 不存在或结果不足时，允许用该工具读取 mock 场景数据。
 - 仅用于补充演示/兜底事实，不得伪造成真实线上结果。
+
+### `previous_failed_track`
+
+- 仅在失败重试场景使用。
+- 用于读取上一失败 task 的完整轨迹，避免重复失败路径。
 
 ## 场景化步骤（必须遵守）
 
@@ -144,7 +151,7 @@ controller 阶段不要求补齐：
 ```json
 {
   "action_kind": "observe|generate_task",
-  "tool": "read|ls|latest_run_snapshot|recent_tasks|demo_lookup",
+  "tool": "read|ls|latest_run_snapshot|recent_tasks|demo_lookup|previous_failed_track",
   "args": {},
   "task_type": "normal|functest|accutest|perftest",
   "task_content": "一句最小可执行任务描述",

@@ -4,7 +4,7 @@
 
 ## 全局口径
 
-1. 环境默认观测输入是 `TASKS_JSON`（不含 `controller_trace`）。
+1. 环境默认观测输入是 `TASKS_JSON`（不含 `track`）；失败轨迹需通过工具显式获取。
 2. controller 只输出一个下一步动作：`observe` 或 `generate_task`。
 3. `task_content` 是本轮任务 target，不是完整执行配置。
 4. 不得把“缺配置文件路径”默认等同于“不能生成 task_content”。
@@ -41,6 +41,7 @@
 - `latest_run_snapshot {"task_type":"...","include_trace":false}`
 - `recent_tasks {"limit":5,"task_type":"...","status":"done|failed","include_trace":false}`
 - `demo_lookup {"key":"normal.latest_summary"}`
+- `previous_failed_track {}`（失败重试时读取上一失败 task 的 track）
 
 ## task_type 与 reference 映射
 

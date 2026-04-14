@@ -453,13 +453,18 @@ def _tool_demo_lookup(*, workspace_root: Path, key: str = "") -> str:
     )
 
 
-def _build_observe_tools(*, workspace_root: Path) -> dict[str, Callable[..., Any]]:
+def _tool_previous_failed_track(*, environment: Environment, **_: Any) -> str:
+    return _json_dump(environment.get_previous_failed_track_view())
+
+
+def _build_observe_tools(*, workspace_root: Path, environment: Environment) -> dict[str, Callable[..., Any]]:
     return {
         "read": lambda **kwargs: _tool_read(workspace_root=workspace_root, **kwargs),
         "ls": lambda **kwargs: _tool_ls(workspace_root=workspace_root, **kwargs),
         "latest_run_snapshot": lambda **kwargs: _tool_latest_run_snapshot(workspace_root=workspace_root, **kwargs),
         "recent_tasks": lambda **kwargs: _tool_recent_tasks(workspace_root=workspace_root, **kwargs),
         "demo_lookup": lambda **kwargs: _tool_demo_lookup(workspace_root=workspace_root, **kwargs),
+        "previous_failed_track": lambda **kwargs: _tool_previous_failed_track(environment=environment, **kwargs),
     }
 
 
@@ -541,7 +546,7 @@ def route_node(
 ) -> tuple[Task, list[ControllerAction]]:
     tasks_context = environment.build_controller_input_view(default_task_limit=5)
 
-    observe_tools = _build_observe_tools(workspace_root=workspace_root)
+    observe_tools = _build_observe_tools(workspace_root=workspace_root, environment=environment)
 
     try:
         route_result = route_task(
@@ -606,13 +611,8 @@ def normal_node(
         skipped_task, skipped_reply = skipped
         return skipped_task, skipped_reply, _build_agent_track(agent="normal", event="skip", task=skipped_task, reply=skipped_reply)
 
-    tasks_context = environment.build_observation_view(
-        task_limit=5,
-        include_user_input=True,
-        include_task=True,
-        include_reply=True,
-        include_trace=False,
-    )
+    # 约束：normal 执行阶段不注入 environment 视图。
+    tasks_context: dict[str, Any] = {}
     result = run_normal_task(
         llm=llm,
         system_prompt=normal_system,

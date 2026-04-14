@@ -98,6 +98,24 @@ class Environment:
         }
 
 
+    def get_previous_failed_track_view(self) -> dict[str, Any]:
+        failed_context = self.get_last_failed_task_context()
+        if failed_context is None:
+            return {
+                "found": False,
+                "reason": "no failed task found in current environment",
+            }
+
+        return {
+            "found": True,
+            "round_id": failed_context.get("round_id"),
+            "task_id": failed_context.get("task_id"),
+            "task": failed_context.get("task"),
+            "reply": failed_context.get("reply"),
+            "track": failed_context.get("track", []),
+        }
+
+
     def build_controller_input_view(self, *, default_task_limit: int = 5) -> dict[str, Any]:
         failed_context = self.get_last_failed_task_context()
 
@@ -118,7 +136,6 @@ class Environment:
             "task": failed_context.get("task"),
             "reply": failed_context.get("reply"),
         }
-        view["previous_failed_track"] = failed_context.get("track", [])
         return view
 
     def show_environment(self, *, show_trace: bool = False) -> str:

@@ -5,12 +5,12 @@
 你可用输入只有三类：
 
 1. `TASK_CONTENT`：本轮任务内容
-2. `TASKS_JSON`：默认 observation view（包含 `cur_round` 与最近任务，默认不包含 `controller_trace`）
+2. `TASKS_JSON`：固定为空对象 `{}`（normal 阶段不注入 environment）
 3. `NORMAL_SKILLS_INDEX`：normal 执行规则
 
 ## 工作流程
 
-1. 读取 `TASK_CONTENT`、`TASKS_JSON`、`NORMAL_SKILLS_INDEX`
+1. 读取 `TASK_CONTENT`、`NORMAL_SKILLS_INDEX`（`TASKS_JSON` 固定为空对象）
 2. 基于已有上下文完成本轮 normal task
 3. 输出最终 `reply`、`task_status`、`task_result`
 
