@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -215,6 +216,16 @@ class Environment:
                         event = str(step.get("event", step.get("action_kind", ""))) if isinstance(step, dict) else ""
                         reason = str(step.get("reason", "")) if isinstance(step, dict) else ""
                         lines.append(f"  - agent={agent} event={event} reason={reason}")
+
+                        if isinstance(step, dict) and "return" in step:
+                            return_value = step.get("return")
+                            if isinstance(return_value, (dict, list)):
+                                return_text = json.dumps(return_value, ensure_ascii=False)
+                            else:
+                                return_text = str(return_value)
+                            if len(return_text) > 300:
+                                return_text = return_text[:300] + "..."
+                            lines.append(f"    return: {return_text}")
 
             lines.append("------------------------------")
 

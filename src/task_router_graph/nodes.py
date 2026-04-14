@@ -565,18 +565,32 @@ def _controller_trace_to_track(controller_trace: list[ControllerAction]) -> list
         item = action.to_dict()
         item["agent"] = "controller"
 
+        action_kind = str(item.get("action_kind", "")).strip().lower()
+        if action_kind == "observe":
+            item["return"] = str(item.get("observation", "")).strip()
+        elif action_kind == "generate_task":
+            item["return"] = {
+                "task_type": str(item.get("task_type", "")).strip(),
+                "task_content": str(item.get("task_content", "")).strip(),
+            }
 
         track.append(item)
     return track
 
 
 def _build_agent_track(*, agent: str, event: str, task: Task) -> list[dict[str, Any]]:
+    task_status = str(task.status).strip()
+    task_result = str(task.result).strip()
     return [
         {
             "agent": agent,
             "event": event,
-            "task_status": str(task.status).strip(),
-            "task_result": str(task.result).strip(),
+            "task_status": task_status,
+            "task_result": task_result,
+            "return": {
+                "task_status": task_status,
+                "task_result": task_result,
+            },
         }
     ]
 
@@ -765,6 +779,10 @@ def failure_diagnosis_node(
         "task_status": "failed",
         "task_result": merged_result,
         "analysis": analysis,
+        "return": {
+            "analysis": analysis,
+            "task_result": merged_result,
+        },
     }
     environment.annotate_last_failed_task(
         analyzed_result=merged_result,
@@ -809,13 +827,20 @@ def reply_node(
         else:
             reply = "本轮任务未完成，请根据任务结果继续排查。"
 
+    task_status = str(task.status).strip()
+    task_result = str(task.result).strip()
     environment.append_last_task_track(
         track_item={
             "agent": "reply",
             "event": "compose",
-            "task_status": str(task.status).strip(),
-            "task_result": str(task.result).strip(),
+            "task_status": task_status,
+            "task_result": task_result,
             "reply": reply,
+            "return": {
+                "task_status": task_status,
+                "task_result": task_result,
+                "reply": reply,
+            },
         }
     )
     return reply
