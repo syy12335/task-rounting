@@ -18,7 +18,7 @@
 
 - `previous_failed_track {}`：返回上一失败 task 的完整 track（包含 controller + 执行 agent）
 
-不得假设该信息已注入 `TASKS_JSON`；必须显式调用工具获取。
+不得假设完整失败轨迹已注入 `TASKS_JSON`；必须显式调用工具获取。
 
 ### `previous_failed_task`（来自 TASKS_JSON）
 
@@ -56,10 +56,8 @@ controller 阶段不要求补齐：
 
 - `read`：`{"path":"..."}`
 - `ls`：`{"path":"..."}`
-- `latest_run_snapshot`：`{"task_type":"normal|functest|accutest|perftest(可选)","include_trace":false}`
-- `recent_tasks`：`{"limit":5,"task_type":"...","status":"done|failed","include_trace":false}`
 - `demo_lookup`：`{"key":"normal.latest_summary"}`（读取 mock demo 数据）
-- `build_observation_view`：`{"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`（按需读取 environment 视图；必要时再开启 trace）
+- `build_observation_view`：`{"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`（按需读取当前 environment 视图）
 - `previous_failed_track`：`{}`（仅用于失败重试时读取上一失败轨迹）
 - `beijing_time`：`{}`（获取当前北京时间）
 - `web_search`：`{"query":"...","limit":3}`（上网检索公开信息，仅在外部时效事实缺失时使用）
@@ -72,18 +70,13 @@ controller 阶段不要求补齐：
    - 第一优先级必须是 `read` 对应 task_type 的 reference 文件。
    - 不得先进行目录探索。
 
-2. 如果缺的是外部环境事实（历史 run、报告、用户明确提到的文件、某个具体产物）：
-   - 优先使用 `latest_run_snapshot` / `recent_tasks`。
-   - 若是失败重试，先调用 `previous_failed_track {}`。
-   - 仅在工具结果仍不足且路径已明确时，才允许 `read` / `ls` 文件系统。
+2. 如果缺的是当前 environment 事实（本轮/本会话历史任务、失败轨迹）：
+   - 优先使用 `build_observation_view`（必要时再 include_trace=true）。
+   - 失败重试优先 `previous_failed_track {}`。
 
-3. 如果 task_type 明确且对象明确，且请求不显式依赖外部环境事实：
+3. 如果 task_type 明确且对象明确，且请求不显式依赖额外事实：
    - 应优先生成面向该对象的 `task_content` target；
    - 不应继续为了“补配置”而默认 observe 文件系统。
-
-4. 需要看环境任务摘要时可调用 `build_observation_view`；
-   - 不要默认用 `build_observation_view(include_trace=true)` 拉全量轨迹。
-   - 如果仅需失败轨迹，优先使用 `previous_failed_track {}`，而不是全量拉取 `build_observation_view(include_trace=true)`。
 
 ## 工具边界（硬规则）
 
@@ -91,7 +84,6 @@ controller 阶段不要求补齐：
 
 - 当 `USER_INPUT` 已可初步判断 task_type 时，第一步 observe 优先使用 `read` 读取该 task_type 的 reference。
 - 不得先为了“看看有没有配置”去扫描目录。
-- 用户提到“最近一次/上一次/latest”时，先走 `latest_run_snapshot` 或 `recent_tasks`，而不是猜路径读文件。
 - 禁止臆造文件名（例如 `outputs/latest_*.json`、`latest_result.json`）并直接 `read`。
 
 ### `ls`
@@ -101,25 +93,10 @@ controller 阶段不要求补齐：
 - 禁止将 `ls` 作为默认第一步。
 - 禁止无目标扫描 `configs`、仓库根目录或其他泛目录。
 
-### `latest_run_snapshot`
-
-- 用于“最近一次任务/最近一次测试结果”类问题。
-- 默认先取最近 run；如需限定类型再传 `task_type`。
-
-### `recent_tasks`
-
-- 用于“最近 N 次”“上轮失败点”“上一轮 accutest 评分”类问题。
-- 优先通过 `task_type`、`status` 过滤，不要先文件扫描。
-
 ### `demo_lookup`
 
-- 当历史 run 不存在或结果不足时，允许用该工具读取 mock 场景数据。
+- 当当前 environment 历史为空或结果不足时，允许读取 mock 场景数据。
 - 仅用于补充演示/兜底事实，不得伪造成真实线上结果。
-
-### `previous_failed_track`
-
-- 仅在失败重试场景使用。
-- 用于读取上一失败 task 的完整轨迹，避免重复失败路径。
 
 ### `build_observation_view`
 
@@ -144,14 +121,14 @@ controller 阶段不要求补齐：
 1. `请帮我做一次 anthropic_ver_1 的功能测试`
    - `read functest-task.md` -> `generate_task(functest)`
 
-2. `请总结上一次测试结果并给出下一步建议`
-   - `read normal-task.md` -> `latest_run_snapshot`（必要时再 `recent_tasks`）-> `generate_task(normal)`
+2. `请总结当前会话里上一次测试结果并给出下一步建议`
+   - `read normal-task.md` -> `build_observation_view(task_limit=3, include_trace=false, include_user_input=false, include_task=true, include_reply=false)` -> `generate_task(normal)`
 
-3. `请解释上一轮 accutest 的评分含义`
-   - `read normal-task.md` -> `recent_tasks(task_type=accutest, limit=1)` -> `generate_task(normal)`
+3. `请解释当前会话里上一轮 accutest 的评分含义`
+   - `read normal-task.md` -> `build_observation_view(task_limit=5, include_trace=false, include_user_input=false, include_task=true, include_reply=false)` -> `generate_task(normal)`
 
 4. `基于上轮失败点再做一次功能复测`
-   - `read functest-task.md` -> `recent_tasks(task_type=functest, status=failed, limit=1, include_trace=true)` -> `generate_task(functest)`
+   - `read functest-task.md` -> `previous_failed_track {}` -> `generate_task(functest)`
 
 ## `generate_task` 规则
 
@@ -159,7 +136,7 @@ controller 阶段不要求补齐：
 
 1. task_type 已明确；
 2. 本轮 target（对象、目标、方向）已明确；
-3. 若请求显式依赖外部环境事实，相关事实已被 observe 到。
+3. 若请求显式依赖外部事实，相关事实已被 observe 到。
 
 ## 输入块
 
@@ -182,7 +159,7 @@ controller 阶段不要求补齐：
 ```json
 {
   "action_kind": "observe|generate_task",
-  "tool": "read|ls|latest_run_snapshot|recent_tasks|demo_lookup|previous_failed_track|build_observation_view|beijing_time|web_search",
+  "tool": "read|ls|demo_lookup|previous_failed_track|build_observation_view|beijing_time|web_search",
   "args": {},
   "task_type": "normal|functest|accutest|perftest",
   "task_content": "一句最小可执行任务描述",

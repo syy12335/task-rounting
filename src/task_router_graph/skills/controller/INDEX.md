@@ -4,10 +4,11 @@
 
 ## 全局口径
 
-1. 环境默认观测输入是 `TASKS_JSON`（不含 `track`）；失败场景下可能附带 `previous_failed_task` 摘要，完整失败轨迹仍需通过工具显式获取。
+1. 环境默认观测输入是 `TASKS_JSON`（不含 `track`）；失败场景下可能附带 `previous_failed_task` 摘要，完整失败轨迹需通过工具显式获取。
 2. controller 只输出一个下一步动作：`observe` 或 `generate_task`。
 3. `task_content` 是本轮任务 target，不是完整执行配置。
 4. 不得把“缺配置文件路径”默认等同于“不能生成 task_content”。
+5. 禁止跨 run 历史扫描工具；只允许读取当前 environment 或显式文件。
 
 ## Observe 顺序与边界
 
@@ -17,35 +18,20 @@
    - 优先 `read` 最相关 reference。
    - 禁止先目录探索。
 
-2. 缺外部环境事实（历史 run、报告、用户明确文件、具体产物）：
-   - 优先 `latest_run_snapshot` / `recent_tasks`。
-   - 需要当前 environment 摘要时可用 `build_observation_view`。
+2. 缺当前 environment 事实（本轮/本会话任务摘要、失败轨迹）：
+   - 优先 `build_observation_view`。
+   - 失败重试优先 `previous_failed_track`。
    - 只有路径明确且工具结果不足时，才允许 `read/ls` 文件系统。
-
-### `ls` 约束
-
-- `ls` 仅用于已知目录下的定向查看。
-- 禁止空参数 `ls {}`。
-- 禁止将 `ls` 作为默认第一步。
-- 禁止无目标扫描 `configs`、仓库根目录或泛目录。
-
-### `read` 约束
-
-- 当 `USER_INPUT` 已可初步判断 task_type，第一步 observe 优先 `read` 该 task_type reference。
-- 不得先为了补配置执行目录扫描。
-- 禁止臆造 `latest_result.json` 或 `outputs/latest_*.json` 路径。
 
 ## 可用 observe 工具
 
 - `read {"path":"..."}`
 - `ls {"path":"..."}`
-- `latest_run_snapshot {"task_type":"...","include_trace":false}`
-- `recent_tasks {"limit":5,"task_type":"...","status":"done|failed","include_trace":false}`
 - `demo_lookup {"key":"normal.latest_summary"}`
-- `build_observation_view {"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`（按需读取 environment 视图；必要时再开启 trace）
-- `previous_failed_track {}`（失败重试时读取上一失败 task 的 track）
-- `beijing_time {}`（获取当前北京时间）
-- `web_search {"query":"...","limit":3}`（上网检索公开信息，仅在需要外部时效事实时使用）
+- `build_observation_view {"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`
+- `previous_failed_track {}`
+- `beijing_time {}`
+- `web_search {"query":"...","limit":3}`
 
 ## task_type 与 reference 映射
 
@@ -67,58 +53,29 @@
    - 输入示例：`请帮我做一次 anthropic_ver_1 的功能测试`
    - 步骤：`read functest-task.md` -> `generate_task(functest)`
 
-2. 场景：总结最近一次测试结果（normal）
+2. 场景：总结当前会话最近一次测试结果（normal）
    - 输入示例：`请总结上一次测试结果并给出下一步建议`
-   - 步骤：`read normal-task.md` -> `latest_run_snapshot` -> `generate_task(normal)`
-   - 若 snapshot 不足：补 `recent_tasks(limit=2)`
+   - 步骤：`read normal-task.md` -> `build_observation_view(task_limit=3, include_task=true)` -> `generate_task(normal)`
 
-3. 场景：解释上一轮 accutest 评分（normal）
+3. 场景：解释当前会话上一轮 accutest（normal）
    - 输入示例：`请解释上一轮 accutest 的评分含义`
-   - 步骤：`read normal-task.md` -> `recent_tasks(task_type=accutest, limit=1)` -> `generate_task(normal)`
+   - 步骤：`read normal-task.md` -> `build_observation_view(task_limit=5, include_task=true)` -> `generate_task(normal)`
 
 4. 场景：基于失败点复测（functest）
    - 输入示例：`基于上轮失败点再做一次功能复测`
-   - 步骤：`read functest-task.md` -> `recent_tasks(task_type=functest, status=failed, limit=1, include_trace=true)` -> `generate_task(functest)`
+   - 步骤：`read functest-task.md` -> `previous_failed_track {}` -> `generate_task(functest)`
 
-5. 场景：没有历史 run，走 demo 兜底
+5. 场景：当前 environment 信息不足，走 demo 兜底
    - 步骤：`demo_lookup(key=...)` 获取 mock 事实后，再 `generate_task`
    - demo 数据源：`data/rl/tool_demo_data.json`
-
----
-
-## `normal` task
-
-定位：解释、总结、查阅、引导、继续回答类任务。
-
-Reference：`normal-task.md`
-
-## `functest` task
-
-定位：功能测试任务，用于定义“本轮测试目标（target）”。
-
-Reference：`functest-task.md`
-
-## `accutest` task
-
-定位：精度/质量/评分评估任务。
-
-Reference：`accutest-task.md`
-
-## `perftest` task
-
-定位：性能测试任务，用于评估延迟、吞吐、并发、压测表现。
-
-Reference：`perftest-task.md`
-
 
 ## 轨迹成本提醒
 
 - `build_observation_view(include_trace=true)` 会显著增加上下文体积。
 - sub agent 的轨迹不一定有价值，但上下文开销通常很大，必要时才使用。
 
-
 ## build_observation_view 的推荐参数
 
-- 因 `USER_INPUT` 与 `TASKS_JSON` 已注入，默认设置：`include_user_input=false`、`include_task=false`、`include_reply=false`。
+- 因 `USER_INPUT` 与 `TASKS_JSON` 已注入，默认：`include_user_input=false`、`include_task=false`、`include_reply=false`。
 - 仅在必要时启用：`include_trace=true`。
 - 若只需失败轨迹，优先 `previous_failed_track {}`。

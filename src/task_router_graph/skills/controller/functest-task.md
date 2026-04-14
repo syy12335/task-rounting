@@ -33,18 +33,17 @@
 2. 将用户显式关注点写入 `task_content`
 3. `generate_task(functest)`
 
-### 场景 C：基于已有结果的复测
+### 场景 C：基于本会话失败点的复测
 
 示例：
 
-- 用昨天那次配置再做一次功能测试
 - 基于上轮失败点再做一次功能复测
 
 步骤：
 
 1. `read functest-task.md`
-2. `recent_tasks {"task_type":"functest","status":"failed","limit":1,"include_trace":true}`
-3. 若历史为空：`demo_lookup {"key":"functest.retest_from_failed"}`
+2. `previous_failed_track {}`
+3. 若当前 environment 无失败记录：`demo_lookup {"key":"functest.retest_from_failed"}`
 4. `generate_task(functest)`
 
 ### 场景 D：对象不明确的泛化请求
@@ -57,7 +56,7 @@
 步骤：
 
 1. `read functest-task.md`
-2. 仅在对象不明确时再 observe 历史上下文（优先 `latest_run_snapshot` / `recent_tasks`）
+2. 必要时 `build_observation_view` 读取当前 environment 摘要
 3. 明确对象后 `generate_task(functest)`
 
 ## 3. `task_content` 生成原则
@@ -75,7 +74,7 @@
 只有以下情况才需要 observe：
 
 1. 用户没有给出明确测试对象。
-2. 用户显式引用历史 run、已有报告、已有配置或已有产物。
+2. 用户显式引用当前会话已有任务或失败轨迹。
 3. 当前请求的 target 必须依赖某个外部事实才能成立。
 
 反向约束：
@@ -89,7 +88,7 @@
 
 - 针对 anthropic_ver_1 执行功能测试，重点验证核心功能行为与断言结果
 - 对 genai_ver_1 执行功能测试，重点检查请求结构与返回行为是否符合预期
-- 基于最近一次 functest 失败点对 anthropic_ver_1 进行复测，重点确认上轮失败断言
+- 基于当前会话最近一次 functest 失败点进行复测，重点确认上轮失败断言
 
 不推荐：
 
