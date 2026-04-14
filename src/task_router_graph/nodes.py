@@ -8,6 +8,7 @@ from .agents import (
     ControllerRouteError,
     route_task,
     run_accutest_task,
+    run_failure_analysis_task,
     run_functest_task,
     run_normal_task,
     run_perftest_task,
@@ -710,6 +711,65 @@ def perftest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     task.result = result["task_result"]
     reply = result["reply"]
     return task, reply, _build_agent_track(agent="perftest", event="execute", task=task, reply=reply)
+
+
+def failure_analysis_node(
+    *,
+    llm: Any,
+    failure_analysis_system: str,
+    environment: Environment,
+    task: Task,
+    invoke_config: dict[str, Any] | None = None,
+) -> tuple[Environment, Task]:
+    if str(task.status).strip().lower() != "failed":
+        return environment, task
+
+    failed_context = environment.get_last_failed_task_context()
+    if failed_context is None:
+        return environment, task
+
+    failed_task_payload = failed_context.get("task")
+    if not isinstance(failed_task_payload, dict):
+        failed_task_payload = task.to_dict()
+
+    failed_track_payload = failed_context.get("track")
+    normalized_track: list[dict[str, Any]] = []
+    if isinstance(failed_track_payload, list):
+        for step in failed_track_payload:
+            if isinstance(step, dict):
+                normalized_track.append(dict(step))
+
+    try:
+        analysis = run_failure_analysis_task(
+            llm=llm,
+            system_prompt=failure_analysis_system,
+            task=failed_task_payload,
+            track=normalized_track,
+            invoke_config=invoke_config,
+        )
+    except Exception as exc:
+        analysis = f"失败分析不可用: {exc}"
+
+    analysis = analysis.strip()
+    if not analysis:
+        return environment, task
+
+    base_result = str(task.result).strip()
+    merged_result = f"{base_result}\n[失败分析] {analysis}" if base_result else f"[失败分析] {analysis}"
+    task.result = merged_result
+
+    analyzer_track = {
+        "agent": "failure_analyzer",
+        "event": "analyze",
+        "task_status": "failed",
+        "task_result": merged_result,
+        "analysis": analysis,
+    }
+    environment.annotate_last_failed_task(
+        analyzed_result=merged_result,
+        analyzer_track=analyzer_track,
+    )
+    return environment, task
 
 
 def update_node(

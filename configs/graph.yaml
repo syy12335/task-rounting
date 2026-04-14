@@ -30,3 +30,4 @@ runtime:
   max_rounds: 4
   max_controller_steps: 3
   default_task_type: normal
+  max_failed_retries: 3

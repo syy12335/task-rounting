@@ -9,7 +9,15 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from .llm import build_chat_model
-from .nodes import accutest_node, functest_node, normal_node, perftest_node, route_node, update_node
+from .nodes import (
+    accutest_node,
+    failure_analysis_node,
+    functest_node,
+    normal_node,
+    perftest_node,
+    route_node,
+    update_node,
+)
 from .schema import ControllerAction, Environment, Output, Task, to_dict
 from .utils import read_json, timestamp_tag, write_json
 
@@ -40,6 +48,7 @@ class TaskRouterGraph:
         self._llm = build_chat_model(self.config)
         self._controller_system = self._load_prompt("src/task_router_graph/prompt/controller/system.md")
         self._normal_system = self._load_prompt("src/task_router_graph/prompt/normal/system.md")
+        self._failure_analysis_system = self._load_prompt("src/task_router_graph/prompt/failure_analysis/system.md")
 
         self._controller_skills_index = self._load_skill_bundle("src/task_router_graph/skills/controller/INDEX.md")
         self._normal_skills_index = self._load_skill_bundle("src/task_router_graph/skills/normal/INDEX.md")
@@ -47,7 +56,7 @@ class TaskRouterGraph:
         runtime_cfg = self.config.get("runtime", {})
         self._max_controller_steps = int(runtime_cfg.get("max_controller_steps", runtime_cfg.get("max_observe_steps", 3)))
         self._max_task_turns = int(runtime_cfg.get("max_task_turns", 5))
-        self._max_failed_retries = int(runtime_cfg.get("max_failed_retries", 2))
+        self._max_failed_retries = int(runtime_cfg.get("max_failed_retries", 3))
         self._run_root = (self.root / self.config["paths"]["run_root"]).resolve()
 
         self._compiled_graph = self._build_graph()
@@ -62,6 +71,7 @@ class TaskRouterGraph:
         builder.add_node("accutest", self._accutest_step)
         builder.add_node("perftest", self._perftest_step)
         builder.add_node("update", self._update_step)
+        builder.add_node("failure_analyze", self._failure_analyze_step)
 
         builder.add_edge(START, "init")
         builder.add_edge("init", "route")
@@ -83,10 +93,12 @@ class TaskRouterGraph:
             "update",
             self._pick_after_update,
             {
+                "failure_analyze": "failure_analyze",
                 "route": "route",
                 "end": END,
             },
         )
+        builder.add_edge("failure_analyze", "route")
 
         return builder.compile()
 
@@ -151,6 +163,19 @@ class TaskRouterGraph:
         task, reply, agent_track = perftest_node(task=state["task"])
         return {"task": task, "reply": reply, "agent_track": agent_track}
 
+    def _failure_analyze_step(self, state: GraphState) -> GraphState:
+        environment, task = failure_analysis_node(
+            llm=self._llm,
+            failure_analysis_system=self._failure_analysis_system,
+            environment=state["environment"],
+            task=state["task"],
+            invoke_config=self._build_llm_invoke_config(state=state, node="failure_analyze"),
+        )
+        return {
+            "environment": environment,
+            "task": task,
+        }
+
     def _update_step(self, state: GraphState) -> GraphState:
         environment = update_node(
             state["environment"],
@@ -171,7 +196,7 @@ class TaskRouterGraph:
             "failed_retry_count": failed_retry_count,
         }
 
-    def _pick_after_update(self, state: GraphState) -> Literal["route", "end"]:
+    def _pick_after_update(self, state: GraphState) -> Literal["failure_analyze", "route", "end"]:
         task_status = str(state["task"].status).strip().lower()
         task_turn = int(state.get("task_turn", 0))
 
@@ -183,9 +208,9 @@ class TaskRouterGraph:
 
         if task_status == "failed":
             failed_retry_count = int(state.get("failed_retry_count", 0))
-            if failed_retry_count >= self._max_failed_retries:
-                return "end"
-            return "route"
+            if failed_retry_count <= self._max_failed_retries:
+                return "failure_analyze"
+            return "end"
 
         return "route"
 

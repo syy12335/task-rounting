@@ -98,6 +98,32 @@ class Environment:
         }
 
 
+    def annotate_last_failed_task(
+        self,
+        *,
+        analyzed_result: str,
+        analyzer_track: dict[str, Any] | None = None,
+    ) -> bool:
+        if not self.rounds:
+            return False
+
+        last_round = self.rounds[-1]
+        if not last_round.tasks:
+            return False
+
+        last_task = last_round.tasks[-1]
+        if str(last_task.task.status).strip().lower() != "failed":
+            return False
+
+        last_task.task.result = str(analyzed_result).strip()
+
+        if isinstance(analyzer_track, dict):
+            last_task.track.append(copy.deepcopy(analyzer_track))
+
+        self.updated_at = _now_iso()
+        return True
+
+
     def get_previous_failed_track_view(self) -> dict[str, Any]:
         failed_context = self.get_last_failed_task_context()
         if failed_context is None:
