@@ -14,7 +14,7 @@
 
 1. 读取 `TASK_CONTENT`、`NORMAL_SKILLS_INDEX`（`TASKS_JSON` 固定为空对象）
 2. 基于已有上下文完成本轮 normal task
-3. 输出执行阶段回执 `reply`、`task_status`、`task_result`
+3. 输出执行结果 `task_status`、`task_result`
 
 ## 输入块
 
@@ -36,9 +36,8 @@
 
 ```json
 {
-  "reply": "执行阶段回执（会写入环境记录）",
   "task_status": "done|failed",
-  "task_result": "简短且事实化的执行摘要"
+  "task_result": "normal 场景下应直接给出基于用户输入的答复正文"
 }
 ```
 
@@ -47,3 +46,6 @@
 - 不重路由 task 类型
 - 不输出 schema 之外字段
 - 不伪造事实
+
+
+- normal 场景下，`task_result` 应尽量可直接面向用户（而不是系统摘要）。

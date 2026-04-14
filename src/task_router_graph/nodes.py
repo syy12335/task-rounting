@@ -551,20 +551,12 @@ def _build_route_failed_task(*, user_input: str, reason: str) -> Task:
     return Task(type="normal", content=user_input, status="failed", result=message)
 
 
-def _build_execute_reply(*, stage: str, task: Task) -> str:
-    status = str(task.status).strip().lower() or "unknown"
-    result = str(task.result).strip()
-    if result:
-        return f"[{stage}] status={status}; result={result}"
-    return f"[{stage}] status={status}"
-
-
 def _try_skip_execute(task: Task, *, stage: str) -> tuple[Task, str] | None:
     status = str(task.status).strip().lower()
     if status not in {"done", "failed"}:
         return None
 
-    return task, _build_execute_reply(stage=stage, task=task)
+    return task, ""
 
 
 def _controller_trace_to_track(controller_trace: list[ControllerAction]) -> list[dict[str, Any]]:
@@ -572,18 +564,19 @@ def _controller_trace_to_track(controller_trace: list[ControllerAction]) -> list
     for action in controller_trace:
         item = action.to_dict()
         item["agent"] = "controller"
+
+
         track.append(item)
     return track
 
 
-def _build_agent_track(*, agent: str, event: str, task: Task, reply: str) -> list[dict[str, Any]]:
+def _build_agent_track(*, agent: str, event: str, task: Task) -> list[dict[str, Any]]:
     return [
         {
             "agent": agent,
             "event": event,
             "task_status": str(task.status).strip(),
             "task_result": str(task.result).strip(),
-            "reply": str(reply).strip(),
         }
     ]
 
@@ -664,7 +657,7 @@ def normal_node(
     skipped = _try_skip_execute(task, stage="normal")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="normal", event="skip", task=skipped_task, reply=skipped_reply)
+        return skipped_task, skipped_reply, _build_agent_track(agent="normal", event="skip", task=skipped_task)
 
     # 约束：normal 执行阶段不注入 environment 视图。
     tasks_context: dict[str, Any] = {}
@@ -678,47 +671,47 @@ def normal_node(
     )
     task.status = result["task_status"]
     task.result = result["task_result"]
-    reply = _build_execute_reply(stage="normal", task=task)
-    return task, reply, _build_agent_track(agent="normal", event="execute", task=task, reply=reply)
+    reply = ""
+    return task, reply, _build_agent_track(agent="normal", event="execute", task=task)
 
 
 def functest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="functest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="functest", event="skip", task=skipped_task, reply=skipped_reply)
+        return skipped_task, skipped_reply, _build_agent_track(agent="functest", event="skip", task=skipped_task)
 
     result = run_functest_task(task_content=task.content)
     task.status = result["task_status"]
     task.result = result["task_result"]
-    reply = _build_execute_reply(stage="functest", task=task)
-    return task, reply, _build_agent_track(agent="functest", event="execute", task=task, reply=reply)
+    reply = ""
+    return task, reply, _build_agent_track(agent="functest", event="execute", task=task)
 
 
 def accutest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="accutest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="accutest", event="skip", task=skipped_task, reply=skipped_reply)
+        return skipped_task, skipped_reply, _build_agent_track(agent="accutest", event="skip", task=skipped_task)
 
     result = run_accutest_task(task_content=task.content)
     task.status = result["task_status"]
     task.result = result["task_result"]
-    reply = _build_execute_reply(stage="accutest", task=task)
-    return task, reply, _build_agent_track(agent="accutest", event="execute", task=task, reply=reply)
+    reply = ""
+    return task, reply, _build_agent_track(agent="accutest", event="execute", task=task)
 
 
 def perftest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="perftest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="perftest", event="skip", task=skipped_task, reply=skipped_reply)
+        return skipped_task, skipped_reply, _build_agent_track(agent="perftest", event="skip", task=skipped_task)
 
     result = run_perftest_task(task_content=task.content)
     task.status = result["task_status"]
     task.result = result["task_result"]
-    reply = _build_execute_reply(stage="perftest", task=task)
-    return task, reply, _build_agent_track(agent="perftest", event="execute", task=task, reply=reply)
+    reply = ""
+    return task, reply, _build_agent_track(agent="perftest", event="execute", task=task)
 
 
 def failure_diagnosis_node(

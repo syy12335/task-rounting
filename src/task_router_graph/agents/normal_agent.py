@@ -42,12 +42,10 @@ class NormalAgent:
         text = extract_text(response.content if hasattr(response, "content") else str(response))
         payload = parse_json_object(text)
 
-        reply = str(payload.get("reply", "")).strip()
         task_status = str(payload.get("task_status", "")).strip()
         task_result = str(payload.get("task_result", "")).strip()
 
         return {
-            "reply": reply,
             "task_status": task_status,
             "task_result": task_result,
         }
@@ -59,7 +57,6 @@ class NormalAgent:
         tasks: dict[str, Any],
         normal_skills_index: str,
     ) -> str:
-        # 将运行时上下文填充到模板，保持 NormalAgent 的输入结构稳定。
         rendered = self.system_prompt
         rendered = _replace_last(rendered, "{{TASK_CONTENT}}", task_content)
         rendered = _replace_last(rendered, "{{TASKS_JSON}}", json.dumps(tasks, ensure_ascii=False, indent=2))
