@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 from .agents import (
     ControllerRouteError,
@@ -22,6 +26,10 @@ MAX_RECENT_TASKS = 20
 MAX_RUN_SCAN = 200
 MAX_OBSERVATION_VIEW_TASKS = 20
 MAX_OBSERVATION_VIEW_WITH_TRACE_TASKS = 5
+MAX_WEB_SEARCH_RESULTS = 5
+MAX_WEB_SEARCH_QUERY_CHARS = 120
+MAX_WEB_SEARCH_HTTP_BYTES = 120000
+NORMAL_AGENT_MAX_STEPS = 4
 ALLOWED_TASK_TYPES = {"normal", "functest", "accutest", "perftest"}
 
 
@@ -675,18 +683,24 @@ def normal_node(
 
     # 约束：normal 执行阶段不注入 environment 视图。
     tasks_context: dict[str, Any] = {}
+    normal_tools = _build_normal_tools()
     result = run_normal_task(
         llm=llm,
         system_prompt=normal_system,
         task_content=task.content,
         tasks=tasks_context,
         normal_skills_index=normal_skills_index,
+        observe_tools=normal_tools,
+        max_steps=NORMAL_AGENT_MAX_STEPS,
         invoke_config=invoke_config,
     )
-    task.status = result["task_status"]
-    task.result = result["task_result"]
+    task.status = str(result.get("task_status", "")).strip()
+    task.result = str(result.get("task_result", "")).strip()
     reply = ""
-    return task, reply, _build_agent_track(agent="normal", event="execute", task=task)
+
+    normal_trace = _build_normal_trace(result.get("normal_trace", []))
+    normal_trace.extend(_build_agent_track(agent="normal", event="execute", task=task))
+    return task, reply, normal_trace
 
 
 def functest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
@@ -866,3 +880,148 @@ def update_node(
         reply=reply,
     )
     return environment
+
+
+def _safe_http_get_text(*, url: str, timeout_sec: float = 10.0, max_bytes: int = MAX_WEB_SEARCH_HTTP_BYTES) -> str:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "task-routing-normal-agent/1.0 (+https://example.local)",
+            "Accept": "application/rss+xml, application/xml, text/xml, text/plain, */*",
+        },
+    )
+    with urlopen(request, timeout=timeout_sec) as response:
+        raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raw = raw[:max_bytes]
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _tool_beijing_time(**_: Any) -> str:
+    beijing_tz = timezone(timedelta(hours=8), name="Asia/Shanghai")
+    now = datetime.now(tz=beijing_tz)
+    payload = {
+        "timezone": "Asia/Shanghai",
+        "utc_offset": "+08:00",
+        "iso": now.isoformat(),
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "weekday": now.strftime("%A"),
+        "note": "北京时间（中国标准时间）",
+    }
+    return _json_dump(payload)
+
+
+def _parse_bing_rss_results(*, xml_text: str, limit: int) -> list[dict[str, str]]:
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except Exception:
+        return []
+
+    results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for item in root.findall("./channel/item"):
+        title = str(item.findtext("title") or "").strip()
+        link = str(item.findtext("link") or "").strip()
+        desc = str(item.findtext("description") or "").strip()
+
+        if not link or link in seen_urls:
+            continue
+        seen_urls.add(link)
+
+        results.append(
+            {
+                "title": title,
+                "url": link,
+                "snippet": desc,
+            }
+        )
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+def _tool_web_search(*, query: str, limit: int = 3, **_: Any) -> str:
+    query_value = str(query or "").strip()
+    if not query_value:
+        return _json_dump({"error": "query is empty"})
+
+    if len(query_value) > MAX_WEB_SEARCH_QUERY_CHARS:
+        return _json_dump(
+            {
+                "error": (
+                    f"query is too long (>{MAX_WEB_SEARCH_QUERY_CHARS}). "
+                    "Please use a concise and specific query."
+                )
+            }
+        )
+
+    try:
+        limit_value = int(limit)
+    except Exception:
+        limit_value = 3
+    limit_value = max(1, min(MAX_WEB_SEARCH_RESULTS, limit_value))
+
+    rss_url = f"https://www.bing.com/search?q={quote_plus(query_value)}&format=rss&setlang=zh-Hans"
+
+    try:
+        xml_text = _safe_http_get_text(url=rss_url)
+    except Exception as exc:
+        return _json_dump(
+            {
+                "query": query_value,
+                "count": 0,
+                "results": [],
+                "error": f"web search request failed: {exc}",
+            }
+        )
+
+    results = _parse_bing_rss_results(xml_text=xml_text, limit=limit_value)
+    payload: dict[str, Any] = {
+        "query": query_value,
+        "count": len(results),
+        "results": results,
+        "engine": "bing_rss",
+        "usage_note": "web_search 开销较高且结果噪声较大，仅在必须依赖外部时效信息时使用",
+    }
+    if not results:
+        payload["hint"] = "no results found; try a more specific query"
+
+    return _json_dump(payload)
+
+
+def _build_normal_tools() -> dict[str, Callable[..., Any]]:
+    return {
+        "beijing_time": lambda **kwargs: _tool_beijing_time(**kwargs),
+        "web_search": lambda **kwargs: _tool_web_search(**kwargs),
+    }
+
+
+def _build_normal_trace(observations: Any) -> list[dict[str, Any]]:
+    if not isinstance(observations, list):
+        return []
+
+    trace: list[dict[str, Any]] = []
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+
+        tool_name = str(item.get("tool", "")).strip()
+        reason = str(item.get("reason", "")).strip()
+        args = item.get("args", {}) if isinstance(item.get("args"), dict) else {}
+        observation = str(item.get("observation", "")).strip()
+
+        trace.append(
+            {
+                "agent": "normal",
+                "event": "observe",
+                "tool": tool_name,
+                "args": args,
+                "reason": reason,
+                "return": observation,
+            }
+        )
+
+    return trace
