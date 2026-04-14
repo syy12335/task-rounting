@@ -33,9 +33,11 @@
 
 ### execute（normal/functest/accutest/perftest）
 
-- 只负责执行 task，不负责最终对用户整合回复
-- 统一输出语义：只更新 `task_status` 与 `task_result`
-
+- Execute nodes only run the task and do not compose final user-facing reply.
+- Unified output semantics: update only `task_status` and `task_result`.
+- Mock test agents (`functest` / `accutest` / `perftest`) include a placeholder `sleep` to simulate long-running workflow execution.
+- Mock delay is fixed to `5` seconds for now.
+- This `sleep` is intentionally a placeholder. Replace logic in `src/task_router_graph/agents/*test_agent.py` with your own workflow executor.
 ### update
 
 - 持久化当前 task 到 environment（`add_task`）

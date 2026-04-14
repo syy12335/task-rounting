@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
+
+
+FIXED_TEST_AGENT_MOCK_SLEEP_SEC = 5.0
+
+
+def sleep_for_test_agent_mock() -> float:
+    # Placeholder delay for mock test agents to simulate long-running workflow execution.
+    time.sleep(FIXED_TEST_AGENT_MOCK_SLEEP_SEC)
+    return FIXED_TEST_AGENT_MOCK_SLEEP_SEC
 
 
 def extract_text(content: Any) -> str:
