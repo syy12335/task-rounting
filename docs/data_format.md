@@ -2,99 +2,142 @@
 
 ## 1. 输入 Case
 
-data/cases/*.json
+路径：`data/cases/*.json`
 
 示例：
+
+```json
 {
-  case_id: case_01,
-  user_input: 请帮我做一次 anthropic_ver_1 的功能测试
+  "case_id": "case_01",
+  "user_input": "请帮我做一次 anthropic_ver_1 的功能测试"
 }
+```
 
-## 2. Environment Full State（运行时真实状态）
+## 2. 输出 Output（对外）
 
-Environment full state（落盘到 var/runs）顶层字段为：case_id、rounds、cur_round、updated_at。
+`TaskRouterGraph.run()` 返回的 `output`：
 
-示例：
+```json
 {
-  rounds: [
+  "case_id": "case_01",
+  "task_type": "normal|functest|accutest|perftest",
+  "task_status": "done|failed|...",
+  "task_result": "执行链最终任务结果",
+  "reply": "最终面向用户回复（由 reply agent 生成）",
+  "run_dir": "var/runs/run_YYYYMMDD_HHMMSS"
+}
+```
+
+说明：
+
+- `task_result` 由执行链写入（normal/test/diagnoser）。
+- `reply` 由 `final_reply` 节点统一生成。
+
+## 3. Environment Full State（落盘）
+
+路径：`var/runs/run_YYYYMMDD_HHMMSS/environment.json`
+
+顶层字段：`case_id`、`rounds`、`cur_round`、`updated_at`
+
+示例（节选）：
+
+```json
+{
+  "case_id": "case_01",
+  "cur_round": 1,
+  "updated_at": "2026-04-14T07:52:56.728951+00:00",
+  "rounds": [
     {
-      round_id: 1,
-      user_input: 请帮我做一次 anthropic_ver_1 的功能测试,
-      tasks: [
+      "round_id": 1,
+      "user_input": "你好",
+      "tasks": [
         {
-          task_id: 1,
-          controller_trace: [
+          "task_id": 1,
+          "task": {
+            "task_id": 1,
+            "type": "normal",
+            "content": "根据当前问候场景，提供系统使用引导与功能说明",
+            "status": "done",
+            "result": "您好！欢迎使用本系统..."
+          },
+          "reply": "",
+          "track": [
             {
-              action_kind: observe,
-              reason: 需要先确认测试资源,
-              tool: ls,
-              args: {path: .},
-              task_type: null,
-              task_content: null,
-              observation: ...
+              "agent": "controller",
+              "action_kind": "observe",
+              "tool": "read",
+              "args": {"path": "src/task_router_graph/skills/controller/normal-task.md"},
+              "observation": "...",
+              "reason": "...",
+              "return": "..."
             },
             {
-              action_kind: generate_task,
-              reason: 信息已足够,
-              tool: null,
-              args: {},
-              task_type: functest,
-              task_content: 针对 anthropic_ver_1 执行功能测试,
-              observation: null
+              "agent": "controller",
+              "action_kind": "generate_task",
+              "task_type": "normal",
+              "task_content": "根据当前问候场景，提供系统使用引导与功能说明",
+              "reason": "...",
+              "return": {
+                "task_type": "normal",
+                "task_content": "根据当前问候场景，提供系统使用引导与功能说明"
+              }
+            },
+            {
+              "agent": "normal",
+              "event": "execute",
+              "task_status": "done",
+              "task_result": "您好！欢迎使用本系统...",
+              "return": {
+                "task_status": "done",
+                "task_result": "您好！欢迎使用本系统..."
+              }
+            },
+            {
+              "agent": "reply",
+              "event": "compose",
+              "task_status": "done",
+              "task_result": "您好！欢迎使用本系统...",
+              "reply": "您好！欢迎使用本系统...",
+              "return": {
+                "task_status": "done",
+                "task_result": "您好！欢迎使用本系统...",
+                "reply": "您好！欢迎使用本系统..."
+              }
             }
-          ],
-          task: {
-            task_id: 1,
-            type: functest,
-            content: 针对 anthropic_ver_1 执行功能测试,
-            status: done,
-            result: functest 已完成
-          },
-          reply: [functest] 已完成
+          ]
         }
       ]
     }
-  ],
-  cur_round: 1,
-  updated_at: 2026-04-07T10:55:00+00:00
+  ]
 }
+```
 
-## 3. observation view（默认 AI 读取视图）
+## 4. Observation View（AI 读取视图）
 
-注意：observation view 不是 Environment full state。
+注意：observation view 不是 full state。
 
-示例：
+默认结构：
+
+```json
 {
-  cur_round: 1,
-  tasks: [
+  "cur_round": 1,
+  "tasks": [
     {
-      round_id: 1,
-      task_id: 1,
-      user_input: 请帮我做一次 anthropic_ver_1 的功能测试,
-      task: {
-        task_id: 1,
-        type: functest,
-        content: 针对 anthropic_ver_1 执行功能测试,
-        status: done,
-        result: functest 已完成
-      },
-      reply: [functest] 已完成
+      "round_id": 1,
+      "task_id": 1,
+      "user_input": "...",
+      "task": {"task_id": 1, "type": "...", "content": "...", "status": "...", "result": "..."},
+      "reply": "..."
     }
   ]
 }
+```
 
-## 4. observation view（显式带 trace）
+`include_trace=true` 时，task 项会额外带 `track`。
 
-当 include_trace=True 时，observation view 中每条 task 会包含 controller_trace。
+## 5. 关键结论
 
-## 5. 输出文件
+1. 持久化主轨迹字段是 `track`。
+2. `TaskRecord.reply` 与 `output.reply` 不同语义。
+3. 失败重试轨迹读取应走 `previous_failed_track` 工具，不靠默认注入。
 
-var/runs/run_YYYYMMDD_HHMMSS/environment.json
-
-其中 environment.json 必须是 Environment full state（case_id + rounds + cur_round + updated_at）。
-
-## 6. 关键结论
-
-- Environment full state（落盘） = case_id + rounds + cur_round + updated_at。
-- controller_trace 属于 TaskRecord，不是 Environment 顶层字段。
-- observation view 只是读取视图，不替代 full state。
