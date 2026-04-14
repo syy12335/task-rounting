@@ -43,8 +43,7 @@
 
 1. `read functest-task.md`
 2. `previous_failed_track {}`
-3. 若当前 environment 无失败记录：`demo_lookup {"key":"functest.retest_from_failed"}`
-4. `generate_task(functest)`
+3. `generate_task(functest)`
 
 ### 场景 D：对象不明确的泛化请求
 

@@ -27,7 +27,6 @@
 
 - `read {"path":"..."}`
 - `ls {"path":"..."}`
-- `demo_lookup {"key":"normal.latest_summary"}`
 - `build_observation_view {"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`
 - `previous_failed_track {}`
 - `beijing_time {}`
@@ -49,25 +48,25 @@
 
 ## 场景化步骤（按顺序）
 
-1. 场景：明确对象的 functest
+1. 场景：问候 / 引导（normal）
+   - 输入示例：`你好`
+   - 步骤：`read normal-task.md` -> `generate_task(normal)`
+
+2. 场景：明确对象的 functest
    - 输入示例：`请帮我做一次 anthropic_ver_1 的功能测试`
    - 步骤：`read functest-task.md` -> `generate_task(functest)`
 
-2. 场景：总结当前会话最近一次测试结果（normal）
+3. 场景：总结当前会话最近一次测试结果（normal）
    - 输入示例：`请总结上一次测试结果并给出下一步建议`
    - 步骤：`read normal-task.md` -> `build_observation_view(task_limit=3, include_task=true)` -> `generate_task(normal)`
 
-3. 场景：解释当前会话上一轮 accutest（normal）
+4. 场景：解释当前会话上一轮 accutest（normal）
    - 输入示例：`请解释上一轮 accutest 的评分含义`
    - 步骤：`read normal-task.md` -> `build_observation_view(task_limit=5, include_task=true)` -> `generate_task(normal)`
 
-4. 场景：基于失败点复测（functest）
+5. 场景：基于失败点复测（functest）
    - 输入示例：`基于上轮失败点再做一次功能复测`
    - 步骤：`read functest-task.md` -> `previous_failed_track {}` -> `generate_task(functest)`
-
-5. 场景：当前 environment 信息不足，走 demo 兜底
-   - 步骤：`demo_lookup(key=...)` 获取 mock 事实后，再 `generate_task`
-   - demo 数据源：`data/rl/tool_demo_data.json`
 
 ## 轨迹成本提醒
 

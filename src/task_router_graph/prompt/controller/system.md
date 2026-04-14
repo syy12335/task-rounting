@@ -56,7 +56,6 @@ controller 阶段不要求补齐：
 
 - `read`：`{"path":"..."}`
 - `ls`：`{"path":"..."}`
-- `demo_lookup`：`{"key":"normal.latest_summary"}`（读取 mock demo 数据）
 - `build_observation_view`：`{"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":false,"include_reply":false}`（按需读取当前 environment 视图）
 - `previous_failed_track`：`{}`（仅用于失败重试时读取上一失败轨迹）
 - `beijing_time`：`{}`（获取当前北京时间）
@@ -93,11 +92,6 @@ controller 阶段不要求补齐：
 - 禁止将 `ls` 作为默认第一步。
 - 禁止无目标扫描 `configs`、仓库根目录或其他泛目录。
 
-### `demo_lookup`
-
-- 当当前 environment 历史为空或结果不足时，允许读取 mock 场景数据。
-- 仅用于补充演示/兜底事实，不得伪造成真实线上结果。
-
 ### `build_observation_view`
 
 - 用于按需读取当前 environment 视图。
@@ -118,16 +112,19 @@ controller 阶段不要求补齐：
 
 ## 场景化步骤（必须遵守）
 
-1. `请帮我做一次 anthropic_ver_1 的功能测试`
+1. `你好` / `hello`
+   - `read normal-task.md` -> `generate_task(normal)`
+
+2. `请帮我做一次 anthropic_ver_1 的功能测试`
    - `read functest-task.md` -> `generate_task(functest)`
 
-2. `请总结当前会话里上一次测试结果并给出下一步建议`
+3. `请总结当前会话里上一次测试结果并给出下一步建议`
    - `read normal-task.md` -> `build_observation_view(task_limit=3, include_trace=false, include_user_input=false, include_task=true, include_reply=false)` -> `generate_task(normal)`
 
-3. `请解释当前会话里上一轮 accutest 的评分含义`
+4. `请解释当前会话里上一轮 accutest 的评分含义`
    - `read normal-task.md` -> `build_observation_view(task_limit=5, include_trace=false, include_user_input=false, include_task=true, include_reply=false)` -> `generate_task(normal)`
 
-4. `基于上轮失败点再做一次功能复测`
+5. `基于上轮失败点再做一次功能复测`
    - `read functest-task.md` -> `previous_failed_track {}` -> `generate_task(functest)`
 
 ## `generate_task` 规则
@@ -159,7 +156,7 @@ controller 阶段不要求补齐：
 ```json
 {
   "action_kind": "observe|generate_task",
-  "tool": "read|ls|demo_lookup|previous_failed_track|build_observation_view|beijing_time|web_search",
+  "tool": "read|ls|previous_failed_track|build_observation_view|beijing_time|web_search",
   "args": {},
   "task_type": "normal|functest|accutest|perftest",
   "task_content": "一句最小可执行任务描述",

@@ -55,20 +55,6 @@ def _resolve_observe_path(*, workspace_root: Path, raw_path: str) -> Path:
     return target
 
 
-def _safe_json_load(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-def _normalize_task_type(value: Any) -> str:
-    return str(value).strip().lower()
-
-
 def _to_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -86,29 +72,6 @@ def _sanitize_tool_kwargs(kwargs: dict[str, Any], *, reserved: set[str]) -> dict
             continue
         sanitized[key] = value
     return sanitized
-
-
-def _load_tool_demo_data(*, workspace_root: Path) -> dict[str, Any]:
-    demo_path = workspace_root / "data" / "rl" / "tool_demo_data.json"
-    payload = _safe_json_load(demo_path)
-    if payload is None:
-        return {
-            "scenarios": {
-                "normal.latest_summary": {
-                    "target": "总结最近一次测试结果",
-                    "demo_result": "缺少可用历史任务时，仅可给出泛化总结模板",
-                },
-                "normal.accutest_explain": {
-                    "target": "解释上一轮 accutest 评分",
-                    "demo_result": "若当前 environment 无相关任务，应提示缺少必要上下文",
-                },
-                "functest.retest_from_failed": {
-                    "target": "基于上轮失败点再做一次功能复测",
-                    "demo_result": "若当前 environment 无失败任务，应先让用户补充目标对象或失败信息",
-                },
-            },
-        }
-    return payload
 
 
 def _tool_read(*, workspace_root: Path, path: str) -> str:
@@ -159,51 +122,6 @@ def _tool_ls(*, workspace_root: Path, path: str) -> str:
 
     entries = sorted(item.name for item in target.iterdir())
     return "\n".join(entries[:MAX_LIST_ENTRIES])
-
-
-def _tool_demo_lookup(*, workspace_root: Path, key: str = "") -> str:
-    demo_data = _load_tool_demo_data(workspace_root=workspace_root)
-
-    normalized_key = str(key or "").strip()
-    if not normalized_key:
-        scenario_keys: list[str] = []
-        scenarios = demo_data.get("scenarios")
-        if isinstance(scenarios, dict):
-            scenario_keys = sorted(str(item) for item in scenarios.keys())
-
-        return _json_dump(
-            {
-                "mocked": True,
-                "available_keys": sorted(str(item) for item in demo_data.keys()),
-                "scenario_keys": scenario_keys,
-            }
-        )
-
-    if normalized_key in demo_data:
-        return _json_dump(
-            {
-                "mocked": True,
-                "key": normalized_key,
-                "value": demo_data.get(normalized_key),
-            }
-        )
-
-    scenarios = demo_data.get("scenarios")
-    if isinstance(scenarios, dict) and normalized_key in scenarios:
-        return _json_dump(
-            {
-                "mocked": True,
-                "key": normalized_key,
-                "value": scenarios.get(normalized_key),
-            }
-        )
-
-    return _json_dump(
-        {
-            "mocked": True,
-            "error": f"demo key not found: {normalized_key}",
-        }
-    )
 
 
 def _tool_build_observation_view(
@@ -260,10 +178,6 @@ def _build_observe_tools(*, workspace_root: Path, environment: Environment) -> d
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"}),
         ),
         "ls": lambda **kwargs: _tool_ls(
-            workspace_root=workspace_root,
-            **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"}),
-        ),
-        "demo_lookup": lambda **kwargs: _tool_demo_lookup(
             workspace_root=workspace_root,
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"}),
         ),

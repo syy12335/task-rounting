@@ -21,37 +21,38 @@
 
 ## normal 场景的步骤模板
 
-1. 当前会话最近一次测试总结
+1. 问候或引导请求
+   - 输入示例：`你好`
+   - 步骤：
+     - `read normal-task.md`
+     - 直接 `generate_task(normal)`
+
+2. 当前会话最近一次测试总结
    - 输入示例：`请总结上一次测试结果并给出下一步建议`
    - 步骤：
      - `read normal-task.md`
      - `build_observation_view {"task_limit": 3, "include_task": true, "include_trace": false, "include_user_input": false, "include_reply": false}`
      - `generate_task(normal)`
 
-2. 当前会话最近 N 次总结
+3. 当前会话最近 N 次总结
    - 输入示例：`整理最近两次测试结果并给出下一步建议`
    - 步骤：
      - `read normal-task.md`
      - `build_observation_view {"task_limit": 2, "include_task": true, "include_trace": false, "include_user_input": true, "include_reply": false}`
      - `generate_task(normal)`
 
-3. 解释当前会话上一轮 accutest 评分
+4. 解释当前会话上一轮 accutest 评分
    - 输入示例：`请解释上一轮 accutest 的评分含义`
    - 步骤：
      - `read normal-task.md`
      - `build_observation_view {"task_limit": 5, "include_task": true, "include_trace": false, "include_user_input": false, "include_reply": false}`
      - `generate_task(normal)`
 
-4. 总结当前会话最近一次 functest 失败原因
+5. 总结当前会话最近一次 functest 失败原因
    - 输入示例：`总结最近一次 functest 的失败原因`
    - 步骤：
      - `read normal-task.md`
      - `build_observation_view {"task_limit": 5, "include_task": true, "include_trace": true, "include_user_input": false, "include_reply": false}`
-     - `generate_task(normal)`
-
-5. 当前 environment 为空时的 mock 兜底
-   - 步骤：
-     - `demo_lookup {"key": "normal.latest_summary"}` 或 `demo_lookup {"key": "normal.accutest_explain"}`
      - `generate_task(normal)`
 
 ## 最小信息要求
@@ -77,7 +78,7 @@
 - 根据当前会话最近一次 functest 结果整理失败原因摘要
 - 总结当前会话最近两次测试任务输出并给出下一步建议
 - 解释当前会话最近一次 accutest 结果的核心结论
-- 根据已有上下文给出使用指导
+- 根据用户问候场景给出系统使用引导与下一步建议
 
 不推荐：
 
