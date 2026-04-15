@@ -39,6 +39,28 @@ def _print_result(result: dict, *, show_environment: bool, show_raw: bool) -> No
         print(json.dumps(environment, ensure_ascii=False, indent=2), flush=True)
 
 
+def _restore_environment(result: dict):
+    try:
+        from task_router_graph.schema import Environment, RoundRecord
+    except Exception:
+        return None
+
+    if not isinstance(result, dict):
+        return None
+
+    environment_payload = result.get("environment")
+    if not isinstance(environment_payload, dict):
+        return None
+
+    rounds_payload = environment_payload.get("rounds", [])
+    rounds = [RoundRecord.from_dict(item) for item in rounds_payload if isinstance(item, dict)]
+    env = Environment(rounds=rounds)
+    updated_at = environment_payload.get("updated_at")
+    if isinstance(updated_at, str) and updated_at.strip():
+        env.updated_at = updated_at
+    return env
+
+
 def main() -> None:
     try:
         parser = argparse.ArgumentParser(description="CLI entrypoint for TaskRouterGraph without case files.")
@@ -85,6 +107,7 @@ def main() -> None:
         if args.interactive:
             print("Interactive mode started. Type /exit to quit.", flush=True)
             turn = 1
+            interactive_environment = None
             while True:
                 try:
                     user_input = input("\nYou> ").strip()
@@ -105,8 +128,9 @@ def main() -> None:
                 result, _ = with_heartbeat(
                     f"Turn {turn}",
                     args.heartbeat_sec,
-                    lambda: graph.run(case_id=case_id, user_input=user_input),
+                    lambda: graph.run(case_id=case_id, user_input=user_input, environment=interactive_environment),
                 )
+                interactive_environment = _restore_environment(result)
 
                 output = result.get("output", {}) if isinstance(result, dict) else {}
                 reply = str(output.get("reply", "")).strip()

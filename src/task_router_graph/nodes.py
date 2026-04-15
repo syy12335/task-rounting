@@ -76,9 +76,12 @@ def _sanitize_tool_kwargs(kwargs: dict[str, Any], *, reserved: set[str]) -> dict
     return sanitized
 
 
-def _tool_read(*, workspace_root: Path, path: str) -> str:
+def _tool_read(*, workspace_root: Path, path: str = "") -> str:
     # Guardrail: block noisy guessed latest-file paths in observe stage.
     raw_path = str(path).strip()
+    if not raw_path:
+        return "ERROR: read requires non-empty path"
+
     path_name_lower = Path(raw_path).name.lower()
     if path_name_lower.startswith("latest_") or path_name_lower == "latest_result.json":
         return "ERROR: forbidden guessed latest path. Use explicit file paths inside workspace or controller observation view."
@@ -110,7 +113,11 @@ def _tool_read(*, workspace_root: Path, path: str) -> str:
     )
 
 
-def _tool_ls(*, workspace_root: Path, path: str) -> str:
+def _tool_ls(*, workspace_root: Path, path: str = "") -> str:
+    raw_path = str(path).strip()
+    if not raw_path:
+        return "ERROR: ls requires non-empty path"
+
     try:
         target = _resolve_observe_path(workspace_root=workspace_root, raw_path=path)
     except Exception as exc:

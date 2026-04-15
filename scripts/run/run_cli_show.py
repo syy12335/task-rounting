@@ -63,6 +63,28 @@ def _build_environment_show_text(result: dict) -> str:
     return env.show_environment(show_trace=True)
 
 
+def _restore_environment(result: dict):
+    try:
+        from task_router_graph.schema import Environment, RoundRecord
+    except Exception:
+        return None
+
+    if not isinstance(result, dict):
+        return None
+
+    environment_payload = result.get("environment")
+    if not isinstance(environment_payload, dict):
+        return None
+
+    rounds_payload = environment_payload.get("rounds", [])
+    rounds = [RoundRecord.from_dict(item) for item in rounds_payload if isinstance(item, dict)]
+    env = Environment(rounds=rounds)
+    updated_at = environment_payload.get("updated_at")
+    if isinstance(updated_at, str) and updated_at.strip():
+        env.updated_at = updated_at
+    return env
+
+
 def _print_show_track(result: dict) -> None:
     print("\n=== Show Track ===", flush=True)
     print(_build_environment_show_text(result), flush=True)
@@ -113,6 +135,7 @@ def main() -> None:
         if args.interactive:
             print("Interactive mode started. Type /exit to quit.", flush=True)
             turn = 1
+            interactive_environment = None
             while True:
                 try:
                     user_input = input("\nYou> ").strip()
@@ -133,8 +156,9 @@ def main() -> None:
                 result, _ = with_heartbeat(
                     f"Turn {turn}",
                     args.heartbeat_sec,
-                    lambda: graph.run(case_id=case_id, user_input=user_input),
+                    lambda: graph.run(case_id=case_id, user_input=user_input, environment=interactive_environment),
                 )
+                interactive_environment = _restore_environment(result)
 
                 output = result.get("output", {}) if isinstance(result, dict) else {}
                 reply = str(output.get("reply", "")).strip()

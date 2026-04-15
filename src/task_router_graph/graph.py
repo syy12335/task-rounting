@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 import re
 from pathlib import Path
-from typing import Any, Literal
+from threading import Lock
+from typing import Any, Callable, Literal
 
 import yaml
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
+from .agents.async_workflows import (
+    run_accutest_async_workflow,
+    run_functest_async_workflow,
+    run_perftest_async_workflow,
+)
 from .llm import build_chat_model
 from .nodes import (
-    accutest_node,
     failure_diagnosis_node,
-    functest_node,
     executor_node,
-    perftest_node,
     reply_node,
     route_node,
     update_node,
@@ -37,6 +42,8 @@ class GraphState(TypedDict, total=False):
     run_dir: str
     task_turn: int
     round_id: int
+    workflow_pending: bool
+    workflow_key: str
 
 
 class TaskRouterGraph:
@@ -63,13 +70,26 @@ class TaskRouterGraph:
         self._default_task_type = default_task_type if default_task_type in {"executor", "functest", "accutest", "perftest"} else "executor"
         self._max_executor_steps = int(runtime_cfg.get("max_executor_steps", 4))
         self._run_root = (self.root / self.config["paths"]["run_root"]).resolve()
+        self._workflow_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=3,
+            thread_name_prefix="task-router-workflow",
+        )
+        self._workflow_jobs: dict[str, dict[str, Any]] = {}
+        self._workflow_lock = Lock()
 
         self._compiled_graph = self._build_graph()
+
+    def __del__(self) -> None:
+        try:
+            self._workflow_executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     def _build_graph(self) -> Any:
         # 执行拓扑：init -> route -> execute -> update -> (done? END : route)
         builder: StateGraph = StateGraph(GraphState)
         builder.add_node("init", self._init_step)
+        builder.add_node("collect_workflows", self._collect_workflows_step)
         builder.add_node("route", self._route_step)
         builder.add_node("executor", self._executor_step)
         builder.add_node("functest", self._functest_step)
@@ -80,7 +100,8 @@ class TaskRouterGraph:
         builder.add_node("final_reply", self._reply_step)
 
         builder.add_edge(START, "init")
-        builder.add_edge("init", "route")
+        builder.add_edge("init", "collect_workflows")
+        builder.add_edge("collect_workflows", "route")
         builder.add_conditional_edges(
             "route",
             self._pick_execute_node,
@@ -123,7 +144,19 @@ class TaskRouterGraph:
             "failed_retry_count": 0,
             "round_id": round_item.round_id,
             "environment": environment,
+            "workflow_pending": False,
+            "workflow_key": "",
         }
+
+    def _collect_workflows_step(self, state: GraphState) -> GraphState:
+        environment = state["environment"]
+        current_round_id = int(state.get("round_id", 0))
+        if current_round_id > 0:
+            self._collect_completed_workflow_jobs(
+                environment=environment,
+                current_round_id=current_round_id,
+            )
+        return {"environment": environment}
 
     def _route_step(self, state: GraphState) -> GraphState:
         task, controller_trace = route_node(
@@ -139,6 +172,8 @@ class TaskRouterGraph:
         return {
             "task": task,
             "controller_trace": controller_trace,
+            "workflow_pending": False,
+            "workflow_key": "",
         }
 
     def _pick_execute_node(self, state: GraphState) -> Literal["executor", "functest", "accutest", "perftest"]:
@@ -161,19 +196,34 @@ class TaskRouterGraph:
             max_steps=self._max_executor_steps,
             invoke_config=self._build_llm_invoke_config(state=state, node="executor"),
         )
-        return {"task": task, "reply": reply, "agent_track": agent_track}
+        return {
+            "task": task,
+            "reply": reply,
+            "agent_track": agent_track,
+            "workflow_pending": False,
+            "workflow_key": "",
+        }
 
     def _functest_step(self, state: GraphState) -> GraphState:
-        task, reply, agent_track = functest_node(task=state["task"])
-        return {"task": task, "reply": reply, "agent_track": agent_track}
+        return self._dispatch_async_workflow_step(
+            state=state,
+            workflow_type="functest",
+            workflow_runner=run_functest_async_workflow,
+        )
 
     def _accutest_step(self, state: GraphState) -> GraphState:
-        task, reply, agent_track = accutest_node(task=state["task"])
-        return {"task": task, "reply": reply, "agent_track": agent_track}
+        return self._dispatch_async_workflow_step(
+            state=state,
+            workflow_type="accutest",
+            workflow_runner=run_accutest_async_workflow,
+        )
 
     def _perftest_step(self, state: GraphState) -> GraphState:
-        task, reply, agent_track = perftest_node(task=state["task"])
-        return {"task": task, "reply": reply, "agent_track": agent_track}
+        return self._dispatch_async_workflow_step(
+            state=state,
+            workflow_type="perftest",
+            workflow_runner=run_perftest_async_workflow,
+        )
 
     def _failure_diagnose_step(self, state: GraphState) -> GraphState:
         environment, task = failure_diagnosis_node(
@@ -215,6 +265,13 @@ class TaskRouterGraph:
         if str(state["task"].status).strip().lower() == "failed":
             failed_retry_count += 1
 
+        if bool(state.get("workflow_pending", False)):
+            self._bind_workflow_source_task(
+                workflow_key=str(state.get("workflow_key", "")).strip(),
+                environment=environment,
+                round_id=int(state["round_id"]),
+            )
+
         return {
             "environment": environment,
             "task_turn": int(state.get("task_turn", 0)) + 1,
@@ -222,8 +279,14 @@ class TaskRouterGraph:
         }
 
     def _pick_after_update(self, state: GraphState) -> Literal["failure_diagnose", "route", "final_reply"]:
+        if bool(state.get("workflow_pending", False)):
+            return "final_reply"
+
         task_status = str(state["task"].status).strip().lower()
         task_turn = int(state.get("task_turn", 0))
+
+        if task_status == "running":
+            return "final_reply"
 
         if task_status == "done":
             return "final_reply"
@@ -232,12 +295,258 @@ class TaskRouterGraph:
             return "final_reply"
 
         if task_status == "failed":
+            task_result = str(state["task"].result).strip().lower()
+            if task_result.startswith("route failed:"):
+                return "final_reply"
+
             failed_retry_count = int(state.get("failed_retry_count", 0))
             if failed_retry_count <= self._max_failed_retries:
                 return "failure_diagnose"
             return "final_reply"
 
         return "route"
+
+    def _dispatch_async_workflow_step(
+        self,
+        *,
+        state: GraphState,
+        workflow_type: str,
+        workflow_runner: Callable[..., dict[str, str]],
+    ) -> GraphState:
+        task = state["task"]
+        task_status = str(task.status).strip().lower()
+
+        if task_status in {"done", "failed"}:
+            return {
+                "task": task,
+                "reply": "",
+                "agent_track": [
+                    {
+                        "agent": "pyskill",
+                        "event": "workflow_skip",
+                        "workflow_type": workflow_type,
+                        "task_status": task.status,
+                        "task_result": task.result,
+                        "return": {
+                            "workflow_type": workflow_type,
+                            "task_status": task.status,
+                            "task_result": task.result,
+                        },
+                    }
+                ],
+                "workflow_pending": False,
+                "workflow_key": "",
+            }
+
+        task.status = "running"
+        task.result = "正在执行"
+        workflow_key = self._build_workflow_key(state=state, workflow_type=workflow_type)
+        workflow_future = self._workflow_executor.submit(
+            workflow_runner,
+            task_content=task.content,
+        )
+        with self._workflow_lock:
+            self._workflow_jobs[workflow_key] = {
+                "future": workflow_future,
+                "workflow_type": workflow_type,
+                "source_round_id": 0,
+                "source_task_id": 0,
+                "source_task_type": str(task.type).strip(),
+                "source_content": str(task.content).strip(),
+            }
+
+        return {
+            "task": task,
+            "reply": "",
+            "agent_track": [
+                {
+                    "agent": "pyskill",
+                    "event": "dispatch_pyskill",
+                    "workflow_type": workflow_type,
+                    "task_status": task.status,
+                    "task_result": task.result,
+                    "run_id": workflow_key,
+                    "return": {
+                        "accepted": True,
+                        "run_id": workflow_key,
+                        "workflow_type": workflow_type,
+                    },
+                }
+            ],
+            "workflow_pending": True,
+            "workflow_key": workflow_key,
+        }
+
+    def _build_workflow_key(self, *, state: GraphState, workflow_type: str) -> str:
+        run_id = str(state.get("run_id", "")).strip()
+        round_id = int(state.get("round_id", 0))
+        task_turn = int(state.get("task_turn", 0))
+        return f"{workflow_type}:{run_id}:{round_id}:{task_turn + 1}"
+
+    def _collect_completed_workflow_jobs(self, *, environment: Environment, current_round_id: int) -> int:
+        ready_keys: list[str] = []
+        with self._workflow_lock:
+            for workflow_key, payload in self._workflow_jobs.items():
+                future = payload.get("future")
+                if isinstance(future, Future) and future.done():
+                    ready_keys.append(workflow_key)
+
+        collected = 0
+        for workflow_key in ready_keys:
+            with self._workflow_lock:
+                payload = self._workflow_jobs.pop(workflow_key, None)
+            if not isinstance(payload, dict):
+                continue
+
+            future = payload.get("future")
+            if not isinstance(future, Future):
+                continue
+
+            workflow_type = str(payload.get("workflow_type", "")).strip()
+            source_content = str(payload.get("source_content", "")).strip()
+            source_round_id = self._safe_int(payload.get("source_round_id", 0))
+            source_task_id = self._safe_int(payload.get("source_task_id", 0))
+            status, result = self._resolve_workflow_result(
+                workflow_key=workflow_key,
+                workflow_type=workflow_type,
+                future=future,
+            )
+
+            completion_event = "workflow_complete" if status == "done" else "workflow_fail"
+            pyskill_task = Task(
+                type="pyskill_task",
+                content=source_content,
+                status=status,
+                result=result,
+            )
+            pyskill_record = environment.add_task(
+                round_id=current_round_id,
+                track=[
+                    {
+                        "agent": "pyskill",
+                        "event": completion_event,
+                        "workflow_type": workflow_type,
+                        "run_id": workflow_key,
+                        "source_round_id": source_round_id,
+                        "source_task_id": source_task_id,
+                        "task_status": status,
+                        "task_result": result,
+                        "return": {
+                            "workflow_type": workflow_type,
+                            "task_status": status,
+                            "task_result": result,
+                            "run_id": workflow_key,
+                        },
+                    }
+                ],
+                task=pyskill_task,
+                reply="",
+            )
+            self._link_source_task_to_pyskill(
+                environment=environment,
+                source_round_id=source_round_id,
+                source_task_id=source_task_id,
+                pyskill_round_id=current_round_id,
+                pyskill_task_id=pyskill_record.task_id,
+                completion_status=status,
+            )
+            collected += 1
+
+        return collected
+
+    def _bind_workflow_source_task(self, *, workflow_key: str, environment: Environment, round_id: int) -> None:
+        if not workflow_key or round_id <= 0:
+            return
+
+        latest_task_id = 0
+        for round_item in environment.rounds:
+            if int(round_item.round_id) != int(round_id):
+                continue
+            if round_item.tasks:
+                latest_task_id = int(round_item.tasks[-1].task_id)
+            break
+
+        if latest_task_id <= 0:
+            return
+
+        with self._workflow_lock:
+            payload = self._workflow_jobs.get(workflow_key)
+            if not isinstance(payload, dict):
+                return
+            if self._safe_int(payload.get("source_task_id", 0)) > 0:
+                return
+            payload["source_round_id"] = int(round_id)
+            payload["source_task_id"] = int(latest_task_id)
+
+    def _link_source_task_to_pyskill(
+        self,
+        *,
+        environment: Environment,
+        source_round_id: int,
+        source_task_id: int,
+        pyskill_round_id: int,
+        pyskill_task_id: int,
+        completion_status: str,
+    ) -> None:
+        if source_round_id <= 0 or source_task_id <= 0:
+            return
+
+        ref_text = f"pyskill_task(round_id={pyskill_round_id}, task_id={pyskill_task_id})"
+        for round_item in environment.rounds:
+            if int(round_item.round_id) != int(source_round_id):
+                continue
+            for task_item in round_item.tasks:
+                if int(task_item.task_id) != int(source_task_id):
+                    continue
+
+                task_item.task.status = "done" if completion_status == "done" else "failed"
+                task_item.task.result = ref_text
+                task_item.track.append(
+                    {
+                        "agent": "pyskill",
+                        "event": "link_pyskill_result",
+                        "task_status": task_item.task.status,
+                        "task_result": task_item.task.result,
+                        "return": {
+                            "source_round_id": source_round_id,
+                            "source_task_id": source_task_id,
+                            "pyskill_round_id": pyskill_round_id,
+                            "pyskill_task_id": pyskill_task_id,
+                        },
+                    }
+                )
+                environment.updated_at = datetime.now(timezone.utc).isoformat()
+                return
+
+    def _resolve_workflow_result(
+        self,
+        *,
+        workflow_key: str,
+        workflow_type: str,
+        future: Future[dict[str, str]],
+    ) -> tuple[str, str]:
+        try:
+            payload = future.result()
+        except Exception as exc:
+            return "failed", f"{workflow_type or 'workflow'} async workflow error: {exc}"
+
+        status = str(payload.get("task_status", "failed")).strip().lower()
+        if status not in {"done", "failed"}:
+            status = "failed"
+
+        result = str(payload.get("task_result", "")).strip()
+        if result:
+            return status, result
+
+        if status == "done":
+            return status, f"{workflow_type or 'workflow'} completed ({workflow_key})"
+        return status, f"{workflow_type or 'workflow'} failed ({workflow_key})"
+
+    def _safe_int(self, value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     def _build_llm_invoke_config(self, *, state: GraphState, node: str) -> dict[str, Any]:
         tags = ["task-router", "llm", f"node:{node}"]
