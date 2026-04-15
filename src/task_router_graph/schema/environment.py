@@ -23,6 +23,18 @@ def _clone_track(track: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return cloned
 
 
+def _strip_failure_analysis_suffix(result_text: str) -> str:
+    text = str(result_text).strip()
+    if not text:
+        return ""
+
+    marker = "\n[失败分析]"
+    if marker not in text:
+        return text
+
+    return text.split(marker, 1)[0].strip()
+
+
 @dataclass
 class Environment:
     # Environment is organized by rounds. Each round can hold multiple tasks.
@@ -186,13 +198,33 @@ class Environment:
             include_trace=False,
         )
 
+        tasks_payload = view.get("tasks")
+        if isinstance(tasks_payload, list):
+            for item in tasks_payload:
+                if not isinstance(item, dict):
+                    continue
+                task_payload = item.get("task")
+                if not isinstance(task_payload, dict):
+                    continue
+                if str(task_payload.get("status", "")).strip().lower() == "failed":
+                    task_payload["result"] = ""
+                    item["reply"] = ""
+
         if previous_failed_context is None:
             return view
+
+        previous_task_payload = previous_failed_context.get("task")
+        if isinstance(previous_task_payload, dict):
+            previous_task_payload = copy.deepcopy(previous_task_payload)
+            if str(previous_task_payload.get("status", "")).strip().lower() == "failed":
+                previous_task_payload["result"] = ""
+            else:
+                previous_task_payload["result"] = _strip_failure_analysis_suffix(previous_task_payload.get("result", ""))
 
         view["previous_failed_task"] = {
             "round_id": previous_failed_context.get("round_id"),
             "task_id": previous_failed_context.get("task_id"),
-            "task": previous_failed_context.get("task"),
+            "task": previous_task_payload,
             "reply": previous_failed_context.get("reply"),
         }
         return view

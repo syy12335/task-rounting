@@ -19,9 +19,16 @@
 ## 技能选择规则（关键）
 
 1. 先阅读 `EXECUTOR_SKILLS_INDEX` 中每个 skill 的元数据，判断是否命中当前任务。
-2. 如果命中某个 skill，且需要细则，使用该 skill 的 `path` 调用 `read` 读取正文。
+2. 如果命中某个 skill，先调用该 skill 的 `path` 做一次 `read`，再执行后续步骤。
 3. 命中 skill 后，skill 正文中的“必须/禁止/先后顺序”等规则优先于通用规则。
 4. 若没有匹配 skill，再按通用 executor 逻辑处理。
+
+## 命中判定（通用规则）
+
+1. 仅基于 `EXECUTOR_SKILLS_INDEX` 中每个 skill 的 `name/description/when_to_use` 判定是否命中。
+2. 优先以 `when_to_use` 作为命中主依据；`description` 用于补充语义边界。
+3. 命中后必须先 `read path` 读取 skill 正文，再执行后续步骤。
+4. 未命中任何 skill 时，按通用 executor 逻辑处理。
 
 ## 对话引导硬规则
 
@@ -93,3 +100,4 @@ finish 动作：
 - 不输出 schema 之外字段
 - 不伪造事实
 - `task_result` 应尽量可直接面向用户
+

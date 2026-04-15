@@ -187,9 +187,12 @@ class ExecutorAgent:
 
             action_kind = str(action.get("action_kind", "")).strip().lower()
             if action_kind == "finish":
+                task_status = str(action.get("task_status", "")).strip()
+                task_result = str(action.get("task_result", "")).strip()
+
                 return {
-                    "task_status": str(action.get("task_status", "")).strip(),
-                    "task_result": str(action.get("task_result", "")).strip(),
+                    "task_status": task_status,
+                    "task_result": task_result,
                     "executor_trace": observations,
                 }
 
@@ -237,6 +240,13 @@ class ExecutorAgent:
                 }
             )
 
+            if isinstance(observation_result, str) and "quota exceeded" in observation_result.lower():
+                return {
+                    "task_status": "failed",
+                    "task_result": observation_result.strip(),
+                    "executor_trace": observations,
+                }
+
         return {
             "task_status": "failed",
             "task_result": "executor agent exceeded max_steps without finish action",
@@ -255,6 +265,7 @@ class ExecutorAgent:
         rendered = replace_last(rendered, "{{TASKS_JSON}}", json.dumps(tasks, ensure_ascii=False, indent=2))
         rendered = replace_last(rendered, "{{EXECUTOR_SKILLS_INDEX}}", executor_skills_index)
         return rendered
+
 
 
 def _validate_executor_action(action: dict[str, Any]) -> None:
