@@ -286,7 +286,7 @@ def route_node(
     *,
     llm: Any,
     controller_system: str,
-    controller_skills_index: str,
+    controller_skills_root: str,
     environment: Environment,
     user_input: str,
     workspace_root: Path,
@@ -303,10 +303,12 @@ def route_node(
             system_prompt=controller_system,
             user_input=user_input,
             tasks=tasks_context,
-            skills_index=controller_skills_index,
+            skills_index=None,
             observe_tools=observe_tools,
             max_steps=max_steps,
             invoke_config=invoke_config,
+            workspace_root=workspace_root,
+            skills_root=controller_skills_root,
         )
     except ControllerRouteError as exc:
         task = _build_route_failed_task(user_input=user_input, reason=str(exc))
@@ -350,7 +352,8 @@ def executor_node(
     *,
     llm: Any,
     executor_system: str,
-    executor_skills_index: str,
+    executor_skills_root: str,
+    workspace_root: Path,
     environment: Environment,
     task: Task,
     max_steps: int = 4,
@@ -369,16 +372,18 @@ def executor_node(
         include_reply=False,
         include_trace=False,
     )
-    executor_tools = _build_executor_tools()
+    executor_tools = _build_executor_tools(workspace_root=workspace_root)
     result = run_executor_task(
         llm=llm,
         system_prompt=executor_system,
         task_content=task.content,
         tasks=tasks_context,
-        executor_skills_index=executor_skills_index,
+        executor_skills_index=None,
         observe_tools=executor_tools,
         max_steps=max(1, int(max_steps)),
         invoke_config=invoke_config,
+        workspace_root=workspace_root,
+        executor_skills_root=executor_skills_root,
     )
     task.status = str(result.get("task_status", "")).strip()
     task.result = str(result.get("task_result", "")).strip()
@@ -687,10 +692,18 @@ def _tool_web_search(*, query: str, limit: int = 3, **_: Any) -> str:
     return _json_dump(payload)
 
 
-def _build_executor_tools() -> dict[str, Callable[..., Any]]:
+def _build_executor_tools(*, workspace_root: Path) -> dict[str, Callable[..., Any]]:
     return {
-        "beijing_time": lambda **kwargs: _tool_beijing_time(**_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})),
-        "web_search": lambda **kwargs: _tool_web_search(**_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})),
+        "read": lambda **kwargs: _tool_read(
+            workspace_root=workspace_root,
+            **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"}),
+        ),
+        "beijing_time": lambda **kwargs: _tool_beijing_time(
+            **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})
+        ),
+        "web_search": lambda **kwargs: _tool_web_search(
+            **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})
+        ),
     }
 
 

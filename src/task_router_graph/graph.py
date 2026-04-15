@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
-import re
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Literal
@@ -60,8 +59,8 @@ class TaskRouterGraph:
         self._failure_diagnosis_system = self._load_prompt("src/task_router_graph/prompt/failure_diagnosis/system.md")
         self._reply_system = self._load_prompt("src/task_router_graph/prompt/reply/system.md")
 
-        self._controller_skills_index = self._load_skill_bundle("src/task_router_graph/skills/controller/INDEX.md")
-        self._executor_skills_index = self._load_skill_bundle("src/task_router_graph/skills/executor/INDEX.md")
+        self._controller_skills_root = "src/task_router_graph/skills/controller"
+        self._executor_skills_root = "src/task_router_graph/skills/executor"
 
         runtime_cfg = self.config.get("runtime", {})
         self._max_controller_steps = int(runtime_cfg.get("max_controller_steps", runtime_cfg.get("max_observe_steps", 3)))
@@ -205,7 +204,7 @@ class TaskRouterGraph:
         task, controller_trace = route_node(
             llm=self._llm,
             controller_system=self._controller_system,
-            controller_skills_index=self._controller_skills_index,
+            controller_skills_root=self._controller_skills_root,
             environment=state["environment"],
             user_input=state["user_input"],
             workspace_root=self.root,
@@ -234,7 +233,8 @@ class TaskRouterGraph:
         task, reply, agent_track = executor_node(
             llm=self._llm,
             executor_system=self._executor_system,
-            executor_skills_index=self._executor_skills_index,
+            executor_skills_root=self._executor_skills_root,
+            workspace_root=self.root,
             environment=state["environment"],
             task=state["task"],
             max_steps=self._max_executor_steps,
@@ -770,42 +770,6 @@ class TaskRouterGraph:
     def _load_prompt(self, relative_path: str) -> str:
         return self._resolve(relative_path).read_text(encoding="utf-8").strip()
 
-    def _load_skill_bundle(self, skill_index_path: str) -> str:
-        index_path = self._resolve(skill_index_path)
-        index_text = index_path.read_text(encoding="utf-8").strip()
-
-        sections: list[str] = [
-            "### Skill Index",
-            index_text,
-        ]
-        for relative_ref in self._extract_skill_refs(index_text):
-            ref_path = self._resolve_skill_ref(index_path.parent, relative_ref)
-            sections.extend(
-                [
-                    f"### Skill Reference: {relative_ref}",
-                    ref_path.read_text(encoding="utf-8").strip(),
-                ]
-            )
-        return "\n\n".join(sections).strip()
-
-    def _extract_skill_refs(self, index_text: str) -> list[str]:
-        # Only treat markdown-path-like tokens as skill references.
-        # This avoids mis-parsing command snippets that merely mention .md names.
-        refs = re.findall(r"\x60([A-Za-z0-9_./-]+\.md)\x60", index_text)
-        seen: set[str] = set()
-        ordered_refs: list[str] = []
-        for ref in refs:
-            normalized = ref.strip()
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            ordered_refs.append(normalized)
-        return ordered_refs
-
-    def _resolve_skill_ref(self, index_dir: Path, relative_ref: str) -> Path:
-        if "/" in relative_ref or "\\" in relative_ref:
-            return self._resolve(relative_ref)
-        return (index_dir / relative_ref).resolve()
 
     def _resolve(self, relative_path: str) -> Path:
         return (self.root / relative_path).resolve()

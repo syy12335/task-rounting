@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import Any, Callable
 
 from jsonschema import ValidationError, validate
@@ -198,11 +200,19 @@ class ControllerAgent:
             tasks=tasks,
             skills_index=skills_index,
         )
-        llm = self.llm.bind(response_format={"type": "json_schema", "json_schema": {"name": "controller_action", "strict": True, "schema": _CONTROLLER_ACTION_SCHEMA}})
+        llm = self.llm.bind(
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "controller_action",
+                    "strict": True,
+                    "schema": _CONTROLLER_ACTION_SCHEMA,
+                },
+            }
+        )
 
         observations: list[dict[str, Any]] = []
 
-        # 按 system 约束进行多步决策：先 observe，信息足够后 generate_task。
         for step in range(1, self.max_steps + 1):
             step_invoke_config = merge_invoke_config(
                 invoke_config,
@@ -244,7 +254,6 @@ class ControllerAgent:
                 ) from exc
 
             if action["action_kind"] == "generate_task":
-                # 将当前 task 的 observe 轨迹附加到输出，供 graph 在 update 节点统一写入 environment。
                 action["controller_trace"] = observations
                 return action
 
@@ -293,7 +302,6 @@ class ControllerAgent:
         tasks: dict[str, Any],
         skills_index: str,
     ) -> str:
-        # 模板填充顺序保持固定，便于定位 prompt 问题。
         rendered = self.system_prompt
         rendered = replace_last(rendered, "{{USER_INPUT}}", user_input)
         rendered = replace_last(rendered, "{{TASKS_JSON}}", json.dumps(tasks, ensure_ascii=False, indent=2))
@@ -317,7 +325,6 @@ def _normalize_action_kind(action: dict[str, Any]) -> str:
     has_task_content = bool(str(action.get("task_content", "")).strip())
     has_task = has_task_type or has_task_content
 
-    # 容错：模型偶发漏填 action_kind 时按字段意图推断。
     if has_tool and not has_task:
         return "observe"
     if has_task and not has_tool:
@@ -326,21 +333,87 @@ def _normalize_action_kind(action: dict[str, Any]) -> str:
     return raw
 
 
+def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
+    if workspace_root is None:
+        return Path(__file__).resolve().parents[3]
+    return Path(workspace_root).resolve()
+
+
+def _extract_skill_refs(index_text: str) -> list[str]:
+    refs = re.findall(r"\x60([A-Za-z0-9_./-]+\.md)\x60", index_text, flags=re.IGNORECASE)
+    seen: set[str] = set()
+    ordered_refs: list[str] = []
+    for ref in refs:
+        normalized = ref.strip()
+        lowered = normalized.lower()
+        if lowered in {"skill.md", "index.md"}:
+            continue
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered_refs.append(normalized)
+    return ordered_refs
+
+
+def _resolve_skill_ref(workspace_root: Path, index_dir: Path, relative_ref: str) -> Path:
+    normalized = str(relative_ref).strip()
+    if not normalized:
+        return index_dir
+
+    index_relative = (index_dir / normalized).resolve()
+    repo_relative = (workspace_root / normalized).resolve()
+
+    if index_relative.exists() and index_relative.is_file():
+        return index_relative
+    if repo_relative.exists() and repo_relative.is_file():
+        return repo_relative
+
+    if "/" in normalized or "\\" in normalized:
+        return repo_relative
+    return index_relative
+
+
+def _load_skill_bundle(*, workspace_root: Path, skills_root: str) -> str:
+    index_path = (workspace_root / skills_root / "INDEX.md").resolve()
+    if not index_path.exists() or not index_path.is_file():
+        return ""
+
+    index_text = index_path.read_text(encoding="utf-8").strip()
+    sections: list[str] = ["### Skill Index", index_text]
+
+    for relative_ref in _extract_skill_refs(index_text):
+        ref_path = _resolve_skill_ref(workspace_root, index_path.parent, relative_ref)
+        if not ref_path.exists() or not ref_path.is_file():
+            continue
+        sections.extend([f"### Skill Reference: {relative_ref}", ref_path.read_text(encoding="utf-8").strip()])
+
+    return "\n\n".join(sections).strip()
+
+
 def route_task(
     *,
     llm: Any,
     system_prompt: str,
     user_input: str,
     tasks: dict[str, Any],
-    skills_index: str,
+    skills_index: str | None,
     observe_tools: dict[str, Callable[..., Any]],
     max_steps: int = 3,
     invoke_config: dict[str, Any] | None = None,
+    workspace_root: str | Path | None = None,
+    skills_root: str = "src/task_router_graph/skills/controller",
 ) -> dict[str, Any]:
+    resolved_skills_index = str(skills_index or "").strip()
+    if not resolved_skills_index:
+        resolved_skills_index = _load_skill_bundle(
+            workspace_root=_resolve_workspace_root(workspace_root),
+            skills_root=skills_root,
+        )
+
     return ControllerAgent(llm=llm, system_prompt=system_prompt, max_steps=max_steps).run(
         user_input=user_input,
         tasks=tasks,
-        skills_index=skills_index,
+        skills_index=resolved_skills_index,
         observe_tools=observe_tools,
         invoke_config=invoke_config,
     )
