@@ -2,17 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any
-
-
-FIXED_TEST_AGENT_MOCK_SLEEP_SEC = 5.0
-
-
-def sleep_for_test_agent_mock() -> float:
-    # Placeholder delay for mock test agents to simulate long-running workflow execution.
-    time.sleep(FIXED_TEST_AGENT_MOCK_SLEEP_SEC)
-    return FIXED_TEST_AGENT_MOCK_SLEEP_SEC
 
 
 def extract_text(content: Any) -> str:
@@ -113,13 +103,13 @@ def parse_json_object(text: str) -> dict[str, Any]:
 
     candidates: list[str] = [raw]
 
-    fence_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, flags=re.IGNORECASE | re.DOTALL)
+    fence_match = re.match(r"^```(?:json)?\\s*(.*?)\\s*```$", raw, flags=re.IGNORECASE | re.DOTALL)
     if fence_match:
         fenced = fence_match.group(1).strip()
         if fenced:
             candidates.append(fenced)
 
-    for match in re.findall(r"```(?:json)?\s*(.*?)\s*```", raw, flags=re.IGNORECASE | re.DOTALL):
+    for match in re.findall(r"```(?:json)?\\s*(.*?)\\s*```", raw, flags=re.IGNORECASE | re.DOTALL):
         snippet = match.strip()
         if snippet:
             candidates.append(snippet)

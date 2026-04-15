@@ -35,13 +35,13 @@
 
 - Execute nodes only run the task and do not compose final user-facing reply.
 - Unified output semantics: update only `task_status` and `task_result`.
-- Mock test agents (`functest` / `accutest` / `perftest`) include a placeholder `sleep` to simulate long-running workflow execution.
+- Mock test async workflows (`functest` / `accutest` / `perftest`) include a placeholder `sleep` to simulate long-running workflow execution.
 - Mock delay is fixed to `5` seconds for now.
-- This `sleep` is intentionally a placeholder. Replace logic in `src/task_router_graph/agents/*test_agent.py` with your own workflow executor.
+- This `sleep` is intentionally a placeholder. Replace logic in `src/task_router_graph/agents/async_workflows/*_async_workflow.py` with your own workflow executor.
 ### update
 
 - 持久化当前 task 到 environment（`add_task`）
-- 写入 `track`（controller + 执行 agent）
+- 写入 `track`（controller 多步路由 loop + executor agentic loop + test async workflows）
 - 更新 `failed_retry_count`
 
 ### failure_diagnose

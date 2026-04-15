@@ -13,7 +13,7 @@ from .nodes import (
     accutest_node,
     failure_diagnosis_node,
     functest_node,
-    normal_node,
+    executor_node,
     perftest_node,
     reply_node,
     route_node,
@@ -48,12 +48,12 @@ class TaskRouterGraph:
         # 初始化 LLM 与 prompt/skills 资源。
         self._llm = build_chat_model(self.config)
         self._controller_system = self._load_prompt("src/task_router_graph/prompt/controller/system.md")
-        self._normal_system = self._load_prompt("src/task_router_graph/prompt/normal/system.md")
+        self._executor_system = self._load_prompt("src/task_router_graph/prompt/executor/system.md")
         self._failure_diagnosis_system = self._load_prompt("src/task_router_graph/prompt/failure_diagnosis/system.md")
         self._reply_system = self._load_prompt("src/task_router_graph/prompt/reply/system.md")
 
         self._controller_skills_index = self._load_skill_bundle("src/task_router_graph/skills/controller/INDEX.md")
-        self._normal_skills_index = self._load_skill_bundle("src/task_router_graph/skills/normal/INDEX.md")
+        self._executor_skills_index = self._load_skill_bundle("src/task_router_graph/skills/executor/INDEX.md")
 
         runtime_cfg = self.config.get("runtime", {})
         self._max_controller_steps = int(runtime_cfg.get("max_controller_steps", runtime_cfg.get("max_observe_steps", 3)))
@@ -61,7 +61,7 @@ class TaskRouterGraph:
         self._max_failed_retries = int(runtime_cfg.get("max_failed_retries", 3))
         default_task_type = str(runtime_cfg.get("default_task_type", "normal")).strip().lower()
         self._default_task_type = default_task_type if default_task_type in {"normal", "functest", "accutest", "perftest"} else "normal"
-        self._max_normal_steps = int(runtime_cfg.get("max_normal_steps", 4))
+        self._max_executor_steps = int(runtime_cfg.get("max_executor_steps", runtime_cfg.get("max_normal_steps", 4)))
         self._run_root = (self.root / self.config["paths"]["run_root"]).resolve()
 
         self._compiled_graph = self._build_graph()
@@ -71,7 +71,7 @@ class TaskRouterGraph:
         builder: StateGraph = StateGraph(GraphState)
         builder.add_node("init", self._init_step)
         builder.add_node("route", self._route_step)
-        builder.add_node("normal", self._normal_step)
+        builder.add_node("executor", self._executor_step)
         builder.add_node("functest", self._functest_step)
         builder.add_node("accutest", self._accutest_step)
         builder.add_node("perftest", self._perftest_step)
@@ -85,13 +85,13 @@ class TaskRouterGraph:
             "route",
             self._pick_execute_node,
             {
-                "normal": "normal",
+                "executor": "executor",
                 "functest": "functest",
                 "accutest": "accutest",
                 "perftest": "perftest",
             },
         )
-        builder.add_edge("normal", "update")
+        builder.add_edge("executor", "update")
         builder.add_edge("functest", "update")
         builder.add_edge("accutest", "update")
         builder.add_edge("perftest", "update")
@@ -141,21 +141,25 @@ class TaskRouterGraph:
             "controller_trace": controller_trace,
         }
 
-    def _pick_execute_node(self, state: GraphState) -> Literal["normal", "functest", "accutest", "perftest"]:
+    def _pick_execute_node(self, state: GraphState) -> Literal["executor", "functest", "accutest", "perftest"]:
         task_type = str(state["task"].type).strip().lower()
-        if task_type in {"normal", "functest", "accutest", "perftest"}:
+        if task_type == "normal":
+            return "executor"
+        if task_type in {"functest", "accutest", "perftest"}:
             return task_type  # type: ignore[return-value]
+        if self._default_task_type == "normal":
+            return "executor"
         return self._default_task_type  # type: ignore[return-value]
 
-    def _normal_step(self, state: GraphState) -> GraphState:
-        task, reply, agent_track = normal_node(
+    def _executor_step(self, state: GraphState) -> GraphState:
+        task, reply, agent_track = executor_node(
             llm=self._llm,
-            normal_system=self._normal_system,
-            normal_skills_index=self._normal_skills_index,
+            executor_system=self._executor_system,
+            executor_skills_index=self._executor_skills_index,
             environment=state["environment"],
             task=state["task"],
-            max_steps=self._max_normal_steps,
-            invoke_config=self._build_llm_invoke_config(state=state, node="normal"),
+            max_steps=self._max_executor_steps,
+            invoke_config=self._build_llm_invoke_config(state=state, node="executor"),
         )
         return {"task": task, "reply": reply, "agent_track": agent_track}
 

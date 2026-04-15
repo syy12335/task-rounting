@@ -15,12 +15,14 @@ except Exception:  # pragma: no cover - fallback for minimal env
 from .agents import (
     ControllerRouteError,
     route_task,
-    run_accutest_task,
     run_failure_diagnosis_task,
-    run_functest_task,
-    run_normal_task,
-    run_perftest_task,
+    run_executor_task,
     run_reply_task,
+)
+from .agents.async_workflows import (
+    run_accutest_async_workflow,
+    run_functest_async_workflow,
+    run_perftest_async_workflow,
 )
 from .schema import ControllerAction, Environment, Task
 
@@ -256,12 +258,12 @@ def _controller_trace_to_track(controller_trace: list[ControllerAction]) -> list
     return track
 
 
-def _build_agent_track(*, agent: str, event: str, task: Task) -> list[dict[str, Any]]:
+def _build_executor_track(*, executor: str, event: str, task: Task) -> list[dict[str, Any]]:
     task_status = str(task.status).strip()
     task_result = str(task.result).strip()
     return [
         {
-            "agent": agent,
+            "agent": executor,
             "event": event,
             "task_status": task_status,
             "task_result": task_result,
@@ -337,31 +339,31 @@ def route_node(
     return task, controller_trace
 
 
-def normal_node(
+def executor_node(
     *,
     llm: Any,
-    normal_system: str,
-    normal_skills_index: str,
+    executor_system: str,
+    executor_skills_index: str,
     environment: Environment,
     task: Task,
     max_steps: int = 4,
     invoke_config: dict[str, Any] | None = None,
 ) -> tuple[Task, str, list[dict[str, Any]]]:
-    skipped = _try_skip_execute(task, stage="normal")
+    skipped = _try_skip_execute(task, stage="executor")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="normal", event="skip", task=skipped_task)
+        return skipped_task, skipped_reply, _build_executor_track(executor="executor", event="skip", task=skipped_task)
 
-    # 约束：normal 执行阶段不注入 environment 视图。
+    # 约束：executor 执行阶段不注入 environment 视图。
     tasks_context: dict[str, Any] = {}
-    normal_tools = _build_normal_tools()
-    result = run_normal_task(
+    executor_tools = _build_executor_tools()
+    result = run_executor_task(
         llm=llm,
-        system_prompt=normal_system,
+        system_prompt=executor_system,
         task_content=task.content,
         tasks=tasks_context,
-        normal_skills_index=normal_skills_index,
-        observe_tools=normal_tools,
+        executor_skills_index=executor_skills_index,
+        observe_tools=executor_tools,
         max_steps=max(1, int(max_steps)),
         invoke_config=invoke_config,
     )
@@ -369,57 +371,57 @@ def normal_node(
     task.result = str(result.get("task_result", "")).strip()
     reply = ""
 
-    normal_trace = _build_normal_trace(result.get("normal_trace", []))
-    normal_trace.extend(_build_agent_track(agent="normal", event="execute", task=task))
-    return task, reply, normal_trace
+    executor_trace = _build_executor_trace(result.get("executor_trace", []))
+    executor_trace.extend(_build_executor_track(executor="executor", event="execute", task=task))
+    return task, reply, executor_trace
 
 
 def functest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="functest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="functest", event="skip", task=skipped_task)
+        return skipped_task, skipped_reply, _build_executor_track(executor="functest_async_workflow", event="workflow_skip", task=skipped_task)
 
     try:
-        result = run_functest_task(task_content=task.content)
+        result = run_functest_async_workflow(task_content=task.content)
     except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"functest execute error: {exc}"}
+        result = {"task_status": "failed", "task_result": f"functest async workflow error: {exc}"}
     task.status = str(result.get("task_status", "failed")).strip() or "failed"
     task.result = str(result.get("task_result", "")).strip()
     reply = ""
-    return task, reply, _build_agent_track(agent="functest", event="execute", task=task)
+    return task, reply, _build_executor_track(executor="functest_async_workflow", event="workflow_execute", task=task)
 
 
 def accutest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="accutest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="accutest", event="skip", task=skipped_task)
+        return skipped_task, skipped_reply, _build_executor_track(executor="accutest_async_workflow", event="workflow_skip", task=skipped_task)
 
     try:
-        result = run_accutest_task(task_content=task.content)
+        result = run_accutest_async_workflow(task_content=task.content)
     except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"accutest execute error: {exc}"}
+        result = {"task_status": "failed", "task_result": f"accutest async workflow error: {exc}"}
     task.status = str(result.get("task_status", "failed")).strip() or "failed"
     task.result = str(result.get("task_result", "")).strip()
     reply = ""
-    return task, reply, _build_agent_track(agent="accutest", event="execute", task=task)
+    return task, reply, _build_executor_track(executor="accutest_async_workflow", event="workflow_execute", task=task)
 
 
 def perftest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="perftest")
     if skipped is not None:
         skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_agent_track(agent="perftest", event="skip", task=skipped_task)
+        return skipped_task, skipped_reply, _build_executor_track(executor="perftest_async_workflow", event="workflow_skip", task=skipped_task)
 
     try:
-        result = run_perftest_task(task_content=task.content)
+        result = run_perftest_async_workflow(task_content=task.content)
     except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"perftest execute error: {exc}"}
+        result = {"task_status": "failed", "task_result": f"perftest async workflow error: {exc}"}
     task.status = str(result.get("task_status", "failed")).strip() or "failed"
     task.result = str(result.get("task_result", "")).strip()
     reply = ""
-    return task, reply, _build_agent_track(agent="perftest", event="execute", task=task)
+    return task, reply, _build_executor_track(executor="perftest_async_workflow", event="workflow_execute", task=task)
 
 
 def failure_diagnosis_node(
@@ -672,14 +674,14 @@ def _tool_web_search(*, query: str, limit: int = 3, **_: Any) -> str:
     return _json_dump(payload)
 
 
-def _build_normal_tools() -> dict[str, Callable[..., Any]]:
+def _build_executor_tools() -> dict[str, Callable[..., Any]]:
     return {
         "beijing_time": lambda **kwargs: _tool_beijing_time(**_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})),
         "web_search": lambda **kwargs: _tool_web_search(**_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment"})),
     }
 
 
-def _build_normal_trace(observations: Any) -> list[dict[str, Any]]:
+def _build_executor_trace(observations: Any) -> list[dict[str, Any]]:
     if not isinstance(observations, list):
         return []
 
@@ -695,7 +697,7 @@ def _build_normal_trace(observations: Any) -> list[dict[str, Any]]:
 
         trace.append(
             {
-                "agent": "normal",
+                "agent": "executor",
                 "event": "observe",
                 "tool": tool_name,
                 "args": args,

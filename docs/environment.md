@@ -59,8 +59,8 @@
 
 ### 3.2 执行/诊断/回复步骤（示例）
 
-- `agent=normal|functest|accutest|perftest|diagnoser|reply`
-- `event=execute|skip|analyze|compose`
+- `agent=executor|functest_async_workflow|accutest_async_workflow|perftest_async_workflow|diagnoser|reply`
+- `event=observe|execute|skip|workflow_execute|workflow_skip|analyze|compose`
 - `task_status/task_result`
 - 可选 `reply`（仅 reply 代理或特定步骤）
 - 可选 `return`（步骤返回值）

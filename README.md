@@ -156,7 +156,7 @@ configs/graph.yaml
 - `max_rounds: 4`
 - `max_task_turns: 4`
 - `max_controller_steps: 3`
-- `max_normal_steps: 4`
+- `max_executor_steps: 4`
 - `max_failed_retries: 3`
 
 ## 本地 SGLang

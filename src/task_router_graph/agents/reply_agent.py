@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from .common import extract_text, merge_invoke_config, parse_json_object, replace_last
+from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
 
 
 _REPLY_OUTPUT_SCHEMA: dict[str, Any] = {

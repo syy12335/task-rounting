@@ -6,7 +6,7 @@ from typing import Any
 
 @dataclass
 class ControllerAction:
-    # 单步控制器动作：要么是 observe，要么是 generate_task。
+    # 控制器单个步骤动作：要么是 observe，要么是 generate_task。
     action_kind: str
     reason: str
     tool: str | None = None

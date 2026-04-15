@@ -1,8 +1,8 @@
-# Normal Task Skill Index
+# Executor Task Skill Index
 
-本文件是 `normal` 的执行参考。
+本文件是 `executor` 的执行参考。
 
-当当前 task 已经确定为 `normal` 时，normal executor 应结合：
+当当前 task 已经确定为 `normal` 时，executor 应结合：
 - 当前 `task_content`
 - recent `tasks`
 - 本 skill index
@@ -23,7 +23,7 @@
 
 ## 工具使用（按需）
 
-normal 可按需调用以下 observe 工具：
+executor 可按需调用以下 observe 工具：
 
 - `beijing_time {}`：获取当前北京时间
 - `web_search {"query":"...","limit":3}`：上网检索公开信息
@@ -155,7 +155,7 @@ normal 可按需调用以下 observe 工具：
 
 ### `done`
 
-- 已有上下文足以完成当前 normal task；或
+- 已有上下文足以完成当前 executor task；或
 - 当前属于问候/引导类任务，可直接给出可执行回复。
 
 ### `failed`
@@ -164,7 +164,7 @@ normal 可按需调用以下 observe 工具：
 
 ## `task_result` 写法
 
-`task_result` 直接作为 normal 的用户答复正文（可直接展示给用户）。
+`task_result` 直接作为 executor 的用户答复正文（可直接展示给用户）。
 
 推荐：
 
