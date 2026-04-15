@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
+from .memory import AgentMemory, MemoryOptions
 
 
 _REPLY_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -19,9 +18,10 @@ _REPLY_OUTPUT_SCHEMA: dict[str, Any] = {
 
 
 class ReplyAgent:
-    def __init__(self, *, llm: Any, system_prompt: str) -> None:
+    def __init__(self, *, llm: Any, system_prompt: str, memory_options: MemoryOptions | None = None) -> None:
         self.llm = llm
         self.system_prompt = system_prompt
+        self.memory_options = memory_options or MemoryOptions()
 
     def run(
         self,
@@ -30,6 +30,7 @@ class ReplyAgent:
         final_task: dict[str, Any],
         environment_view: dict[str, Any],
         invoke_config: dict[str, Any] | None = None,
+        recent_rounds_payload: list[dict[str, Any]] | None = None,
     ) -> str:
         rendered_system_prompt = self._render_system_prompt(
             user_input=user_input,
@@ -47,19 +48,23 @@ class ReplyAgent:
             }
         )
 
-        response = llm.invoke(
-            [
-                SystemMessage(content=rendered_system_prompt),
-                HumanMessage(content="请只输出一个合法 JSON 对象，不要输出解释或 Markdown。"),
-            ],
-            config=merge_invoke_config(
-                invoke_config,
-                run_name="task-router.reply.llm",
-                tags=["task-router", "reply"],
-            ),
+        step_invoke_config = merge_invoke_config(
+            invoke_config,
+            run_name="task-router.reply.llm",
+            tags=["task-router", "reply"],
         )
+        memory = AgentMemory(
+            llm=self.llm,
+            system_prompt=rendered_system_prompt,
+            options=self.memory_options,
+        )
+        memory.append_user("请只输出一个合法 JSON 对象，不要输出解释或 Markdown。")
+        memory.maybe_compress(step=1, recent_rounds_payload=recent_rounds_payload, invoke_config=step_invoke_config)
+
+        response = llm.invoke(memory.to_langchain_messages(), config=step_invoke_config)
 
         text = extract_text(response.content if hasattr(response, "content") else str(response))
+        memory.append_assistant(text)
         payload = parse_json_object(text)
 
         reply = str(payload.get("reply", "")).strip()
@@ -88,10 +93,17 @@ def run_reply_task(
     final_task: dict[str, Any],
     environment_view: dict[str, Any],
     invoke_config: dict[str, Any] | None = None,
+    memory_options: MemoryOptions | None = None,
+    recent_rounds_payload: list[dict[str, Any]] | None = None,
 ) -> str:
-    return ReplyAgent(llm=llm, system_prompt=system_prompt).run(
+    return ReplyAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        memory_options=memory_options,
+    ).run(
         user_input=user_input,
         final_task=final_task,
         environment_view=environment_view,
         invoke_config=invoke_config,
+        recent_rounds_payload=recent_rounds_payload,
     )

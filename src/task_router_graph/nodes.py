@@ -19,6 +19,7 @@ from .agents import (
     run_executor_task,
     run_reply_task,
 )
+from .agents.memory import MemoryOptions
 from .agents.async_workflows import (
     run_accutest_async_workflow,
     run_functest_async_workflow,
@@ -141,12 +142,15 @@ def _tool_build_observation_view(
     include_task: bool = True,
     include_reply: bool = True,
     include_trace: bool = False,
+    compact: bool = False,
+    compact_target_tokens: int | None = None,
     **_: Any,
 ) -> str:
     include_trace_value = _to_bool(include_trace)
     include_user_input_value = _to_bool(include_user_input)
     include_task_value = _to_bool(include_task)
     include_reply_value = _to_bool(include_reply)
+    compact_value = _to_bool(compact)
 
     if task_limit is None:
         task_limit_value: int | None = None
@@ -166,6 +170,8 @@ def _tool_build_observation_view(
         include_task=include_task_value,
         include_reply=include_reply_value,
         include_trace=include_trace_value,
+        compact=compact_value,
+        compact_target_tokens=compact_target_tokens,
     )
 
     if include_trace_value:
@@ -292,10 +298,18 @@ def route_node(
     workspace_root: Path,
     max_steps: int,
     invoke_config: dict[str, Any] | None = None,
+    memory_options: MemoryOptions | None = None,
+    environment_view_compact: bool = False,
+    environment_view_compact_target_tokens: int | None = None,
 ) -> tuple[Task, list[ControllerAction]]:
-    tasks_context = environment.build_controller_input_view(default_task_limit=5)
+    tasks_context = environment.build_controller_input_view(
+        default_task_limit=5,
+        compact=environment_view_compact,
+        compact_target_tokens=environment_view_compact_target_tokens,
+    )
 
     observe_tools = _build_observe_tools(workspace_root=workspace_root, environment=environment)
+    recent_rounds_payload = environment.build_rounds_view(include_trace=False)
 
     try:
         route_result = route_task(
@@ -309,6 +323,8 @@ def route_node(
             invoke_config=invoke_config,
             workspace_root=workspace_root,
             skills_root=controller_skills_root,
+            memory_options=memory_options,
+            recent_rounds_payload=recent_rounds_payload,
         )
     except ControllerRouteError as exc:
         task = _build_route_failed_task(user_input=user_input, reason=str(exc))
@@ -358,6 +374,9 @@ def executor_node(
     task: Task,
     max_steps: int = 4,
     invoke_config: dict[str, Any] | None = None,
+    memory_options: MemoryOptions | None = None,
+    environment_view_compact: bool = False,
+    environment_view_compact_target_tokens: int | None = None,
 ) -> tuple[Task, str, list[dict[str, Any]]]:
     skipped = _try_skip_execute(task, stage="executor")
     if skipped is not None:
@@ -371,7 +390,10 @@ def executor_node(
         include_task=True,
         include_reply=False,
         include_trace=False,
+        compact=environment_view_compact,
+        compact_target_tokens=environment_view_compact_target_tokens,
     )
+    recent_rounds_payload = environment.build_rounds_view(include_trace=False)
     executor_tools = _build_executor_tools(workspace_root=workspace_root)
     result = run_executor_task(
         llm=llm,
@@ -384,6 +406,8 @@ def executor_node(
         invoke_config=invoke_config,
         workspace_root=workspace_root,
         executor_skills_root=executor_skills_root,
+        memory_options=memory_options,
+        recent_rounds_payload=recent_rounds_payload,
     )
     task.status = str(result.get("task_status", "")).strip()
     task.result = str(result.get("task_result", "")).strip()
@@ -449,6 +473,7 @@ def failure_diagnosis_node(
     environment: Environment,
     task: Task,
     invoke_config: dict[str, Any] | None = None,
+    memory_options: MemoryOptions | None = None,
 ) -> tuple[Environment, Task]:
     if str(task.status).strip().lower() != "failed":
         return environment, task
@@ -475,6 +500,8 @@ def failure_diagnosis_node(
             task=failed_task_payload,
             track=normalized_track,
             invoke_config=invoke_config,
+            memory_options=memory_options,
+            recent_rounds_payload=environment.build_rounds_view(include_trace=False),
         )
     except Exception as exc:
         analysis = f"失败分析不可用: {exc}"
@@ -513,6 +540,9 @@ def reply_node(
     user_input: str,
     task: Task,
     invoke_config: dict[str, Any] | None = None,
+    memory_options: MemoryOptions | None = None,
+    environment_view_compact: bool = False,
+    environment_view_compact_target_tokens: int | None = None,
 ) -> str:
     environment_view = environment.build_observation_view(
         task_limit=None,
@@ -520,6 +550,8 @@ def reply_node(
         include_task=True,
         include_reply=True,
         include_trace=False,
+        compact=environment_view_compact,
+        compact_target_tokens=environment_view_compact_target_tokens,
     )
 
     try:
@@ -530,6 +562,8 @@ def reply_node(
             final_task=task.to_dict(),
             environment_view=environment_view,
             invoke_config=invoke_config,
+            memory_options=memory_options,
+            recent_rounds_payload=environment.build_rounds_view(include_trace=False),
         )
     except Exception:
         status = str(task.status).strip().lower()

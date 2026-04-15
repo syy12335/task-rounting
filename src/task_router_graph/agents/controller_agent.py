@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from jsonschema import ValidationError, validate
-from langchain_core.messages import HumanMessage, SystemMessage
 
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
+from .memory import AgentMemory, MemoryOptions
 
 
 _OBSERVE_READ_SCHEMA: dict[str, Any] = {
@@ -181,10 +181,18 @@ class ControllerRouteError(ValueError):
 
 
 class ControllerAgent:
-    def __init__(self, *, llm: Any, system_prompt: str, max_steps: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        llm: Any,
+        system_prompt: str,
+        max_steps: int = 3,
+        memory_options: MemoryOptions | None = None,
+    ) -> None:
         self.llm = llm
         self.system_prompt = system_prompt
         self.max_steps = max_steps
+        self.memory_options = memory_options or MemoryOptions()
 
     def run(
         self,
@@ -194,6 +202,7 @@ class ControllerAgent:
         skills_index: str,
         observe_tools: dict[str, Callable[..., Any]],
         invoke_config: dict[str, Any] | None = None,
+        recent_rounds_payload: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         rendered_system_prompt = self._render_system_prompt(
             user_input=user_input,
@@ -211,6 +220,11 @@ class ControllerAgent:
             }
         )
 
+        memory = AgentMemory(
+            llm=self.llm,
+            system_prompt=rendered_system_prompt,
+            options=self.memory_options,
+        )
         observations: list[dict[str, Any]] = []
 
         for step in range(1, self.max_steps + 1):
@@ -220,25 +234,26 @@ class ControllerAgent:
                 tags=["task-router", "controller", f"controller-step:{step}"],
                 metadata={"controller_step": step},
             )
-            response = llm.invoke(
-                [
-                    SystemMessage(content=rendered_system_prompt),
-                    HumanMessage(
-                        content=json.dumps(
-                            {
-                                "step": step,
-                                "observations": observations,
-                                "output_constraints": _OUTPUT_CONSTRAINTS,
-                            },
-                            ensure_ascii=False,
-                            indent=2,
-                        )
-                    ),
-                ],
-                config=step_invoke_config,
+            memory.maybe_compress(
+                step=step,
+                recent_rounds_payload=recent_rounds_payload,
+                invoke_config=step_invoke_config,
             )
+            memory.append_user(
+                json.dumps(
+                    {
+                        "step": step,
+                        "observations": observations,
+                        "output_constraints": _OUTPUT_CONSTRAINTS,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            response = llm.invoke(memory.to_langchain_messages(), config=step_invoke_config)
 
             text = extract_text(response.content if hasattr(response, "content") else str(response))
+            memory.append_assistant(text)
             action = parse_json_object(text)
 
             action_kind = _normalize_action_kind(action)
@@ -289,6 +304,7 @@ class ControllerAgent:
                     "observation": observation_text,
                 }
             )
+            memory.append_tool(observation_text)
 
         raise ControllerRouteError(
             "ControllerAgent exceeded max_steps without returning generate_task",
@@ -402,6 +418,8 @@ def route_task(
     invoke_config: dict[str, Any] | None = None,
     workspace_root: str | Path | None = None,
     skills_root: str = "src/task_router_graph/skills/controller",
+    memory_options: MemoryOptions | None = None,
+    recent_rounds_payload: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_skills_index = str(skills_index or "").strip()
     if not resolved_skills_index:
@@ -410,10 +428,16 @@ def route_task(
             skills_root=skills_root,
         )
 
-    return ControllerAgent(llm=llm, system_prompt=system_prompt, max_steps=max_steps).run(
+    return ControllerAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        max_steps=max_steps,
+        memory_options=memory_options,
+    ).run(
         user_input=user_input,
         tasks=tasks,
         skills_index=resolved_skills_index,
         observe_tools=observe_tools,
         invoke_config=invoke_config,
+        recent_rounds_payload=recent_rounds_payload,
     )

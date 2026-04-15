@@ -35,6 +35,59 @@ def _strip_failure_analysis_suffix(result_text: str) -> str:
     return text.split(marker, 1)[0].strip()
 
 
+def _estimate_tokens(text: str) -> int:
+    raw = str(text or "")
+    if not raw:
+        return 0
+    return max(1, int(len(raw) / 2.8))
+
+
+def _compact_text_value(text: str, *, target_tokens: int) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    if _estimate_tokens(value) <= max(1, int(target_tokens)):
+        return value
+
+    # keep signal from both ends for stable debugging while controlling payload size
+    budget_chars = max(120, int(target_tokens) * 3)
+    head = max(60, int(budget_chars * 0.45))
+    tail = max(60, budget_chars - head)
+    if len(value) <= head + tail:
+        return value
+    return (
+        value[:head]
+        + "\n[COMPACTED_VIEW] ... middle omitted ...\n"
+        + value[-tail:]
+        + f"\n[COMPACTED_META] raw_chars={len(value)}"
+    )
+
+
+def _compact_track(track: list[dict[str, Any]], *, target_tokens: int) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for item in track:
+        if not isinstance(item, dict):
+            continue
+        cloned = copy.deepcopy(item)
+        if "return" in cloned:
+            return_value = cloned.get("return")
+            if isinstance(return_value, (dict, list)):
+                return_text = json.dumps(return_value, ensure_ascii=False)
+            else:
+                return_text = str(return_value)
+            cloned["return"] = _compact_text_value(return_text, target_tokens=target_tokens)
+        compacted.append(cloned)
+    return compacted
+
+
+def _safe_target_tokens(value: int | None, default: int = 600) -> int:
+    try:
+        parsed = int(value) if value is not None else int(default)
+    except Exception:
+        parsed = int(default)
+    return max(80, parsed)
+
+
 @dataclass
 class Environment:
     # Environment is organized by rounds. Each round can hold multiple tasks.
@@ -185,7 +238,13 @@ class Environment:
         }
 
 
-    def build_controller_input_view(self, *, default_task_limit: int = 5) -> dict[str, Any]:
+    def build_controller_input_view(
+        self,
+        *,
+        default_task_limit: int = 5,
+        compact: bool = False,
+        compact_target_tokens: int | None = None,
+    ) -> dict[str, Any]:
         current_failed_context = self.get_current_failed_task_context()
         previous_failed_context = self.get_last_failed_task_context()
 
@@ -196,6 +255,8 @@ class Environment:
             include_task=True,
             include_reply=True,
             include_trace=False,
+            compact=compact,
+            compact_target_tokens=compact_target_tokens,
         )
 
         tasks_payload = view.get("tasks")
@@ -220,6 +281,9 @@ class Environment:
                 previous_task_payload["result"] = ""
             else:
                 previous_task_payload["result"] = _strip_failure_analysis_suffix(previous_task_payload.get("result", ""))
+            if compact:
+                target = _safe_target_tokens(compact_target_tokens)
+                previous_task_payload["result"] = _compact_text_value(previous_task_payload.get("result", ""), target_tokens=target)
 
         view["previous_failed_task"] = {
             "round_id": previous_failed_context.get("round_id"),
@@ -288,11 +352,14 @@ class Environment:
         include_task: bool = True,
         include_reply: bool = True,
         include_trace: bool = False,
+        compact: bool = False,
+        compact_target_tokens: int | None = None,
     ) -> dict[str, Any]:
         self._assert_round_consistency()
 
         # Default read view for AI: cur_round + flattened task items.
         tasks_payload: list[dict[str, object]] = []
+        target_tokens = _safe_target_tokens(compact_target_tokens)
 
         for round_item in self.rounds:
             for task_item in round_item.tasks:
@@ -303,11 +370,20 @@ class Environment:
                 if include_user_input:
                     item["user_input"] = round_item.user_input
                 if include_trace:
-                    item["track"] = _clone_track(task_item.track)
+                    track_payload = _clone_track(task_item.track)
+                    if compact:
+                        track_payload = _compact_track(track_payload, target_tokens=target_tokens)
+                    item["track"] = track_payload
                 if include_task:
-                    item["task"] = task_item.task.to_dict()
+                    task_payload = task_item.task.to_dict()
+                    if compact:
+                        task_payload["result"] = _compact_text_value(task_payload.get("result", ""), target_tokens=target_tokens)
+                    item["task"] = task_payload
                 if include_reply:
-                    item["reply"] = task_item.reply
+                    reply_value = str(task_item.reply)
+                    if compact:
+                        reply_value = _compact_text_value(reply_value, target_tokens=target_tokens)
+                    item["reply"] = reply_value
                 tasks_payload.append(item)
 
         if task_limit is not None:

@@ -7,9 +7,9 @@ from typing import Any, Callable
 
 import yaml
 from jsonschema import ValidationError, validate
-from langchain_core.messages import HumanMessage, SystemMessage
 
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
+from .memory import AgentMemory, MemoryOptions
 
 
 _EXECUTOR_OBSERVE_READ_SCHEMA: dict[str, Any] = {
@@ -108,9 +108,16 @@ DEFAULT_MAX_BEIJING_TIME_CALLS = 2
 
 
 class ExecutorAgent:
-    def __init__(self, *, llm: Any, system_prompt: str) -> None:
+    def __init__(
+        self,
+        *,
+        llm: Any,
+        system_prompt: str,
+        memory_options: MemoryOptions | None = None,
+    ) -> None:
         self.llm = llm
         self.system_prompt = system_prompt
+        self.memory_options = memory_options or MemoryOptions()
 
     def run(
         self,
@@ -124,6 +131,7 @@ class ExecutorAgent:
         max_web_search_calls: int = DEFAULT_MAX_WEB_SEARCH_CALLS,
         max_beijing_time_calls: int = DEFAULT_MAX_BEIJING_TIME_CALLS,
         invoke_config: dict[str, Any] | None = None,
+        recent_rounds_payload: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         rendered_system_prompt = self._render_system_prompt(
             task_content=task_content,
@@ -141,6 +149,11 @@ class ExecutorAgent:
             }
         )
 
+        memory = AgentMemory(
+            llm=self.llm,
+            system_prompt=rendered_system_prompt,
+            options=self.memory_options,
+        )
         observations: list[dict[str, Any]] = []
         read_calls = 0
         web_search_calls = 0
@@ -154,30 +167,31 @@ class ExecutorAgent:
                 metadata={"executor_step": step},
             )
 
-            response = llm.invoke(
-                [
-                    SystemMessage(content=rendered_system_prompt),
-                    HumanMessage(
-                        content=json.dumps(
-                            {
-                                "step": step,
-                                "observations": observations,
-                                "output_constraints": _EXECUTOR_OUTPUT_CONSTRAINTS,
-                                "tool_limits": {
-                                    "read_remaining": max(0, max_read_calls - read_calls),
-                                    "web_search_remaining": max(0, max_web_search_calls - web_search_calls),
-                                    "beijing_time_remaining": max(0, max_beijing_time_calls - beijing_time_calls),
-                                },
-                            },
-                            ensure_ascii=False,
-                            indent=2,
-                        )
-                    ),
-                ],
-                config=step_invoke_config,
+            memory.maybe_compress(
+                step=step,
+                recent_rounds_payload=recent_rounds_payload,
+                invoke_config=step_invoke_config,
             )
+            memory.append_user(
+                json.dumps(
+                    {
+                        "step": step,
+                        "observations": observations,
+                        "output_constraints": _EXECUTOR_OUTPUT_CONSTRAINTS,
+                        "tool_limits": {
+                            "read_remaining": max(0, max_read_calls - read_calls),
+                            "web_search_remaining": max(0, max_web_search_calls - web_search_calls),
+                            "beijing_time_remaining": max(0, max_beijing_time_calls - beijing_time_calls),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            response = llm.invoke(memory.to_langchain_messages(), config=step_invoke_config)
 
             text = extract_text(response.content if hasattr(response, "content") else str(response))
+            memory.append_assistant(text)
             action = parse_json_object(text)
 
             try:
@@ -230,6 +244,12 @@ class ExecutorAgent:
                 if isinstance(observation_result, str)
                 else json.dumps(observation_result, ensure_ascii=False, indent=2)
             )
+            observation_text = memory.trim_large_tool_result(
+                raw_result=observation_text,
+                task_text=task_content,
+                user_text=json.dumps(tasks, ensure_ascii=False),
+                assistant_text=text,
+            )
 
             observations.append(
                 {
@@ -239,6 +259,7 @@ class ExecutorAgent:
                     "observation": observation_text,
                 }
             )
+            memory.append_tool(observation_text)
 
             if isinstance(observation_result, str) and "quota exceeded" in observation_result.lower():
                 return {
@@ -377,6 +398,8 @@ def run_executor_task(
     invoke_config: dict[str, Any] | None = None,
     workspace_root: str | Path | None = None,
     executor_skills_root: str = "src/task_router_graph/skills/executor",
+    memory_options: MemoryOptions | None = None,
+    recent_rounds_payload: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_executor_skills_index = str(executor_skills_index or "").strip()
     if not resolved_executor_skills_index:
@@ -384,11 +407,16 @@ def run_executor_task(
         catalog = _load_executor_skill_catalog(workspace_root=root, executor_skills_root=executor_skills_root)
         resolved_executor_skills_index = _build_executor_skill_registry(catalog)
 
-    return ExecutorAgent(llm=llm, system_prompt=system_prompt).run(
+    return ExecutorAgent(
+        llm=llm,
+        system_prompt=system_prompt,
+        memory_options=memory_options,
+    ).run(
         task_content=task_content,
         tasks=tasks,
         executor_skills_index=resolved_executor_skills_index,
         observe_tools=observe_tools,
         max_steps=max_steps,
         invoke_config=invoke_config,
+        recent_rounds_payload=recent_rounds_payload,
     )
