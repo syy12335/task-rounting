@@ -44,6 +44,7 @@ class GraphState(TypedDict, total=False):
     round_id: int
     workflow_pending: bool
     workflow_key: str
+    skip_route: bool
 
 
 class TaskRouterGraph:
@@ -101,7 +102,14 @@ class TaskRouterGraph:
 
         builder.add_edge(START, "init")
         builder.add_edge("init", "collect_workflows")
-        builder.add_edge("collect_workflows", "route")
+        builder.add_conditional_edges(
+            "collect_workflows",
+            self._pick_after_collect,
+            {
+                "route": "route",
+                "update": "update",
+            },
+        )
         builder.add_conditional_edges(
             "route",
             self._pick_execute_node,
@@ -146,17 +154,52 @@ class TaskRouterGraph:
             "environment": environment,
             "workflow_pending": False,
             "workflow_key": "",
+            "skip_route": False,
         }
 
     def _collect_workflows_step(self, state: GraphState) -> GraphState:
         environment = state["environment"]
         current_round_id = int(state.get("round_id", 0))
+        collected_items: list[dict[str, Any]] = []
         if current_round_id > 0:
-            self._collect_completed_workflow_jobs(
+            collected_items = self._collect_completed_workflow_jobs(
                 environment=environment,
                 current_round_id=current_round_id,
             )
-        return {"environment": environment}
+
+        user_input = str(state.get("user_input", "")).strip()
+        if self._should_shortcut_status_query(
+            user_input=user_input,
+            environment=environment,
+            collected_items=collected_items,
+        ):
+            summary_task = self._build_status_summary_task(
+                environment=environment,
+                collected_items=collected_items,
+            )
+            return {
+                "environment": environment,
+                "task": summary_task,
+                "controller_trace": [],
+                "agent_track": [
+                    {
+                        "agent": "graph",
+                        "event": "status_shortcut",
+                        "task_status": summary_task.status,
+                        "task_result": summary_task.result,
+                        "return": {
+                            "collected_count": len(collected_items),
+                        },
+                    }
+                ],
+                "reply": "",
+                "skip_route": True,
+            }
+
+        return {"environment": environment, "skip_route": False}
+
+    def _pick_after_collect(self, state: GraphState) -> Literal["route", "update"]:
+        return "update" if bool(state.get("skip_route", False)) else "route"
 
     def _route_step(self, state: GraphState) -> GraphState:
         task, controller_trace = route_node(
@@ -174,6 +217,7 @@ class TaskRouterGraph:
             "controller_trace": controller_trace,
             "workflow_pending": False,
             "workflow_key": "",
+            "skip_route": False,
         }
 
     def _pick_execute_node(self, state: GraphState) -> Literal["executor", "functest", "accutest", "perftest"]:
@@ -202,6 +246,7 @@ class TaskRouterGraph:
             "agent_track": agent_track,
             "workflow_pending": False,
             "workflow_key": "",
+            "skip_route": False,
         }
 
     def _functest_step(self, state: GraphState) -> GraphState:
@@ -336,6 +381,7 @@ class TaskRouterGraph:
                 ],
                 "workflow_pending": False,
                 "workflow_key": "",
+                "skip_route": False,
             }
 
         task.status = "running"
@@ -375,6 +421,7 @@ class TaskRouterGraph:
             ],
             "workflow_pending": True,
             "workflow_key": workflow_key,
+            "skip_route": False,
         }
 
     def _build_workflow_key(self, *, state: GraphState, workflow_type: str) -> str:
@@ -383,7 +430,7 @@ class TaskRouterGraph:
         task_turn = int(state.get("task_turn", 0))
         return f"{workflow_type}:{run_id}:{round_id}:{task_turn + 1}"
 
-    def _collect_completed_workflow_jobs(self, *, environment: Environment, current_round_id: int) -> int:
+    def _collect_completed_workflow_jobs(self, *, environment: Environment, current_round_id: int) -> list[dict[str, Any]]:
         ready_keys: list[str] = []
         with self._workflow_lock:
             for workflow_key, payload in self._workflow_jobs.items():
@@ -391,7 +438,7 @@ class TaskRouterGraph:
                 if isinstance(future, Future) and future.done():
                     ready_keys.append(workflow_key)
 
-        collected = 0
+        collected_items: list[dict[str, Any]] = []
         for workflow_key in ready_keys:
             with self._workflow_lock:
                 payload = self._workflow_jobs.pop(workflow_key, None)
@@ -450,9 +497,16 @@ class TaskRouterGraph:
                 pyskill_task_id=pyskill_record.task_id,
                 completion_status=status,
             )
-            collected += 1
+            collected_items.append(
+                {
+                    "workflow_type": workflow_type,
+                    "status": status,
+                    "result": result,
+                    "pyskill_ref": f"pyskill_task(round_id={current_round_id}, task_id={pyskill_record.task_id})",
+                }
+            )
 
-        return collected
+        return collected_items
 
     def _bind_workflow_source_task(self, *, workflow_key: str, environment: Environment, round_id: int) -> None:
         if not workflow_key or round_id <= 0:
@@ -547,6 +601,85 @@ class TaskRouterGraph:
             return int(value)
         except Exception:
             return default
+
+
+    def _should_shortcut_status_query(
+        self,
+        *,
+        user_input: str,
+        environment: Environment,
+        collected_items: list[dict[str, Any]],
+    ) -> bool:
+        if not self._is_status_query(user_input):
+            return False
+
+        if collected_items:
+            return True
+
+        running_refs = self._build_running_task_refs(environment=environment)
+        return bool(running_refs)
+
+    def _build_status_summary_task(
+        self,
+        *,
+        environment: Environment,
+        collected_items: list[dict[str, Any]],
+    ) -> Task:
+        lines: list[str] = []
+
+        for item in collected_items:
+            workflow_type = str(item.get("workflow_type", "workflow")).strip() or "workflow"
+            status = str(item.get("status", "")).strip().lower()
+            result = self._short_text(str(item.get("result", "")).strip(), max_len=180)
+            pyskill_ref = str(item.get("pyskill_ref", "")).strip()
+            if status == "done":
+                lines.append(f"已完成 {workflow_type}：{pyskill_ref}，结果：{result}")
+            else:
+                lines.append(f"{workflow_type} 失败：{pyskill_ref}，结果：{result}")
+
+        running_refs = self._build_running_task_refs(environment=environment)
+        if running_refs:
+            lines.append(f"仍在执行：{'；'.join(running_refs)}")
+
+        if not lines:
+            lines.append("当前暂无可汇总的进展信息。")
+
+        return Task(
+            type="executor",
+            content="状态追问快捷汇总",
+            status="done",
+            result=chr(10).join(lines),
+        )
+
+    def _build_running_task_refs(self, *, environment: Environment) -> list[str]:
+        refs: list[str] = []
+        for round_item in environment.rounds:
+            for task_item in round_item.tasks:
+                status = str(task_item.task.status).strip().lower()
+                if status != "running":
+                    continue
+                refs.append(f"round_id={round_item.round_id}, task_id={task_item.task_id}, type={task_item.task.type}")
+        return refs[-5:]
+
+    def _is_status_query(self, user_input: str) -> bool:
+        query = user_input.strip().lower()
+        if not query:
+            return False
+        keywords = [
+            "现在怎么样",
+            "现在如何",
+            "进展",
+            "状态",
+            "完成了吗",
+            "结果呢",
+            "怎么样了",
+        ]
+        return any(keyword in query for keyword in keywords)
+
+    def _short_text(self, text: str, *, max_len: int) -> str:
+        if len(text) <= max_len:
+            return text
+        return text[:max_len] + "..."
 
     def _build_llm_invoke_config(self, *, state: GraphState, node: str) -> dict[str, Any]:
         tags = ["task-router", "llm", f"node:{node}"]

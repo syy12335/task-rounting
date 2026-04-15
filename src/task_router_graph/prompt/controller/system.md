@@ -61,6 +61,16 @@ controller 阶段不要求补齐：
 - `beijing_time`：`{}`（获取当前北京时间）
 - `web_search`：`{"query":"...","limit":3}`（上网检索公开信息，仅在外部时效事实缺失时使用）
 
+## 参数完整性与去重（硬规则）
+
+1. `read` 与 `ls` 的 `args` 必须带非空 `path`。
+2. `previous_failed_track` 与 `beijing_time` 的 `args` 必须为空对象 `{}`。
+3. `web_search` 的 `args` 必须带 `query`。
+4. 同一 turn 内禁止重复调用“相同 tool + 相同 args”的 observe。
+5. 当 `USER_INPUT` 是状态追问（例如“现在怎么样了/进展如何/完成了吗/结果呢”）且 `TASKS_JSON` 已含可用事实时：
+   - 不得再重复 `read` 同一 reference；
+   - 可直接 `generate_task(executor)`。
+
 ## Observe 决策顺序（硬规则）
 
 当你还不能生成 `task_content` 时，必须先判断“缺失信息类型”：
@@ -76,6 +86,11 @@ controller 阶段不要求补齐：
 3. 如果 task_type 明确且对象明确，且请求不显式依赖额外事实：
    - 应优先生成面向该对象的 `task_content` target；
    - 不应继续为了“补配置”而默认 observe 文件系统。
+
+4. 如果是“状态追问”且 `TASKS_JSON` 已包含最近任务摘要：
+   - 第一优先级使用已有 `TASKS_JSON`（必要时最多一次 `build_observation_view` 补充）；
+   - 之后应直接 `generate_task(executor)`；
+   - 禁止在同一 turn 内循环 `read executor-task.md`。
 
 ## 工具边界（硬规则）
 
@@ -127,6 +142,9 @@ controller 阶段不要求补齐：
 5. `基于上轮失败点再做一次功能复测`
    - `read functest-task.md` -> `previous_failed_track {}` -> `generate_task(functest)`
 
+6. `现在怎么样了` / `进展如何` / `完成了吗`
+   - `build_observation_view(task_limit=5, include_trace=false, include_user_input=false, include_task=true, include_reply=false)` -> `generate_task(executor)`
+
 ## `generate_task` 规则
 
 仅当以下条件同时满足时，才允许 `generate_task`：
@@ -167,6 +185,10 @@ controller 阶段不要求补齐：
 ### 当 `action_kind = "observe"`
 
 - 必须输出：`tool`、`args`、`reason`
+- 参数约束：
+  - `read/ls` 必须带 `args.path`
+  - `web_search` 必须带 `args.query`
+  - `previous_failed_track/beijing_time` 必须是空对象 `args={}`
 - 不得输出：`task_type`、`task_content`
 
 ### 当 `action_kind = "generate_task"`

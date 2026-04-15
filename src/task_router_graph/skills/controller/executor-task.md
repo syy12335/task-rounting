@@ -9,15 +9,18 @@
 - 查看历史报告并提炼结论
 - 给出使用指导
 - 根据已有上下文继续回答用户问题
+- 状态追问（例如：现在怎么样了 / 进展如何 / 完成了吗）
 
 ## 首步 observe 规则
 
 当 `USER_INPUT` 已指向 executor，但 `task_content` 仍不足时：
 
-1. 第一优先级：`read {"path":"src/task_router_graph/skills/controller/executor-task.md"}`
-2. 历史事实优先使用当前 environment：`build_observation_view`
-3. 失败重试优先：`previous_failed_track {}`
-4. 禁止默认目录探索，禁止先猜 `latest_*.json` 路径
+1. 状态追问特例：若 `TASKS_JSON` 已包含最近任务摘要，可直接 `generate_task(executor)`，无需强制 `read`。
+2. 非状态追问：第一优先级是 `read {"path":"src/task_router_graph/skills/controller/executor-task.md"}`。
+3. 历史事实优先使用当前 environment：`build_observation_view`。
+4. 失败重试优先：`previous_failed_track {}`。
+5. 禁止默认目录探索，禁止先猜 `latest_*.json` 路径。
+6. 同一 turn 内禁止重复 `read executor-task.md`。
 
 ## executor 场景的步骤模板
 
@@ -55,6 +58,13 @@
      - `build_observation_view {"task_limit": 5, "include_task": true, "include_trace": true, "include_user_input": false, "include_reply": false}`
      - `generate_task(executor)`
 
+6. 状态追问
+   - 输入示例：`现在怎么样了`
+   - 步骤：
+     - 优先基于 `TASKS_JSON` 直接生成任务
+     - 如事实不足，再 `build_observation_view {"task_limit": 5, "include_task": true, "include_trace": false, "include_user_input": false, "include_reply": false}`
+     - `generate_task(executor)`
+
 ## 最小信息要求
 
 在生成 `executor` 的 `task_content` 前，controller 至少应知道：
@@ -79,6 +89,7 @@
 - 总结当前会话最近两次测试任务输出并给出下一步建议
 - 解释当前会话最近一次 accutest 结果的核心结论
 - 根据用户问候场景给出系统使用引导与下一步建议
+- 汇总当前会话最新状态并指出未完成项/已完成项
 
 不推荐：
 

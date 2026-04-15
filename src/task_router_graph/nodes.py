@@ -361,8 +361,14 @@ def executor_node(
         skipped_task, skipped_reply = skipped
         return skipped_task, skipped_reply, _build_executor_track(executor="executor", event="skip", task=skipped_task)
 
-    # 约束：executor 执行阶段不注入 environment 视图。
-    tasks_context: dict[str, Any] = {}
+    # 注入最近任务摘要，减少“信息不足”导致的无谓失败。
+    tasks_context = environment.build_observation_view(
+        task_limit=3,
+        include_user_input=False,
+        include_task=True,
+        include_reply=False,
+        include_trace=False,
+    )
     executor_tools = _build_executor_tools()
     result = run_executor_task(
         llm=llm,
