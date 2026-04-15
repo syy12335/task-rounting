@@ -15,6 +15,7 @@ var/**
 
 # Local editor
 .vscode/
+.claude/
 
 # Cache
 hf-cache
