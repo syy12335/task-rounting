@@ -1,16 +1,14 @@
 # Data Directory
 
-本项目默认把开发/联调数据统一放在 `data/`，不区分真实或 fake 目录层级。
+本项目开发与评测数据统一放在 `data/`。
 
-## 子目录
+## 当前主目录
 
-- `cases/`: 输入样本（包含历史 case 和新增样本）
-- `environments/`: Environment full state 快照（case_id + rounds + cur_round + updated_at）
-- `rl/`: controller 动作样本（jsonl）
-- `mock/`: 后训练与评测用 mock 数据（分阶段门禁数据集）
+- `eval_samples/`: 后训练评测主入口（统一样本口径，不区分 mock/real）
+- `archive_legacy/`: 历史数据归档（可回溯，不参与当前主评测）
 
 ## 约定
 
-- 当前仓库里的 `data` 默认视为可用于开发和调试的数据集。
-- 不再使用 `data/fake/` 分层。
-- 运行结果统一写入 `var/runs`，不在 `data/` 里存运行输出摘要。
+1. 新评测样本统一写入 `data/eval_samples`。
+2. 历史目录 `cases/environments/rl/mock` 已迁移到 `archive_legacy`。
+3. 运行过程输出仍写入 `var/runs`。
