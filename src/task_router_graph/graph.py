@@ -98,6 +98,8 @@ class TaskRouterGraph:
         self._default_task_type = default_task_type if default_task_type in {"executor", "functest", "accutest", "perftest"} else "executor"
         self._max_executor_steps = int(runtime_cfg.get("max_executor_steps", 4))
         self._pyskill_timeout_sec = max(5, int(runtime_cfg.get("pyskill_timeout_sec", 180)))
+        intent_shortcuts_cfg = str(runtime_cfg.get("intent_shortcuts_config", "configs/intent_shortcuts.yaml")).strip()
+        self._status_query_keywords = self._load_status_query_keywords(config_path=intent_shortcuts_cfg)
         self._context_options = ContextCompressionOptions(
             enabled=bool(runtime_cfg.get("context_enabled", True)),
             window_tokens=int(runtime_cfg.get("context_window_tokens", 3000)),
@@ -131,6 +133,43 @@ class TaskRouterGraph:
             self._workflow_executor.shutdown(wait=False)
         except Exception:
             pass
+
+    def _load_status_query_keywords(self, *, config_path: str) -> tuple[str, ...]:
+        target = (self.root / config_path).resolve() if not Path(config_path).is_absolute() else Path(config_path)
+        if not target.exists() or not target.is_file():
+            raise ValueError(f"intent shortcuts config not found: {target}")
+
+        try:
+            payload = yaml.safe_load(target.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"failed to parse intent shortcuts config: {target}: {exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError(f"intent shortcuts config must be a mapping: {target}")
+
+        section = payload.get("status_query")
+        if not isinstance(section, dict):
+            raise ValueError(f"intent shortcuts config missing 'status_query' mapping: {target}")
+
+        raw_keywords = section.get("keywords")
+        if not isinstance(raw_keywords, list):
+            raise ValueError(f"intent shortcuts config field 'status_query.keywords' must be a list: {target}")
+
+        output: list[str] = []
+        seen: set[str] = set()
+        for item in raw_keywords:
+            keyword = str(item).strip().lower()
+            if not keyword:
+                continue
+            if keyword in seen:
+                continue
+            seen.add(keyword)
+            output.append(keyword)
+
+        if not output:
+            raise ValueError(f"intent shortcuts config 'status_query.keywords' cannot be empty: {target}")
+
+        return tuple(output)
 
     def _build_graph(self) -> Any:
         # 执行拓扑：init -> route -> execute -> update -> (done? END : route)
@@ -1245,16 +1284,7 @@ class TaskRouterGraph:
         query = user_input.strip().lower()
         if not query:
             return False
-        keywords = [
-            "现在怎么样",
-            "现在如何",
-            "进展",
-            "状态",
-            "完成了吗",
-            "结果呢",
-            "怎么样了",
-        ]
-        return any(keyword in query for keyword in keywords)
+        return any(keyword in query for keyword in self._status_query_keywords)
 
     def _short_text(self, text: str, *, max_len: int) -> str:
         if len(text) <= max_len:

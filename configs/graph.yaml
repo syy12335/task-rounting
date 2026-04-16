@@ -20,6 +20,25 @@ model:
       base_url: http://127.0.0.1:30000/v1
       max_tokens: 2048
 
+embedding:
+  # 默认 provider；可用环境变量 EMBEDDING_PROVIDER 覆盖。
+  provider: sglang
+  provider_env: EMBEDDING_PROVIDER
+
+  providers:
+    aliyun:
+      name: text-embedding-v3
+      api_key_env: API_KEY_Qwen
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      request_timeout_sec: 60
+
+    sglang:
+      # 若本地 sglang 不提供 embedding，请切换 EMBEDDING_PROVIDER=aliyun
+      name: text-embedding-v3
+      api_key_env: SGLANG_API_KEY
+      base_url: http://127.0.0.1:30000/v1
+      request_timeout_sec: 60
+
 paths:
   cases_dir: data/cases
   run_root: var/runs
@@ -33,6 +52,7 @@ runtime:
   max_controller_steps: 3
   max_executor_steps: 4
   pyskill_timeout_sec: 180
+  intent_shortcuts_config: configs/intent_shortcuts.yaml
   default_task_type: executor
   max_failed_retries: 3
   context_enabled: true
