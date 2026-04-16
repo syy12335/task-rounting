@@ -46,21 +46,23 @@
 
 ### 3.1 dispatch 阶段
 
-当 `functest/accutest/perftest` 进入异步 workflow：
+当 task 进入异步执行（`functest/accutest/perftest` 或 `executor + skill-mode=pyskill`）：
 
 - source task 立即置为 `status=running`
 - source task 立即写入 `result=正在执行`
 - `track` 记录 `agent=pyskill,event=dispatch_pyskill`
+- executor + pyskill 场景会在 `task.content` 追加 `[pyskill pid=... run_id=...]`
 
 ### 3.2 回收阶段（下一轮或后续轮）
 
-`collect_workflows` 检测到 workflow future 完成后：
+`collect_workflows + pre_reply_collect` 会共同负责回收：
 
 - 在当前 `cur_round` 追加一条 `type=pyskill_task` 的新 task
 - 新 task 状态为 `done/failed`，`result` 为 workflow 最终结果
 - source task 被回链为最终状态：
   - `status=done` 或 `failed`
   - `result=pyskill_task(round_id=..., task_id=...)`
+- `run_id` 是终态幂等键：同一 run 只应有一次终态回填
 
 这保证了“源请求”和“异步结果实体”都可被追踪与复盘。
 
@@ -70,6 +72,12 @@
 
 - 若有已完成回收或仍在执行的任务，graph 可直接生成状态汇总 task
 - 汇总 task 也会进入当前 round，并通过 `update` 节点落盘
+
+### 3.4 超时与死进程收敛
+
+- 若后台进程超时（`runtime.pyskill_timeout_sec`），回填 failed `pyskill_task`
+- 若任务仍是 `running` 但进程已死/句柄丢失，也会 failed 收敛
+- 重启后历史 `running` 任务会按默认策略 failed 收敛，避免长期悬挂
 
 ## 4. Track 约定
 
@@ -92,6 +100,7 @@
 - `agent=executor|pyskill|diagnoser|reply`
 - `event=execute|skip|dispatch_pyskill|workflow_complete|workflow_fail|link_pyskill_result|analyze|compose`
 - `task_status/task_result`
+- 可选 `run_id/pid`（pyskill 相关事件）
 - 可选 `reply`（仅 reply 代理或特定步骤）
 - 可选 `return`（步骤返回值）
 

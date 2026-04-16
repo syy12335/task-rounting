@@ -11,7 +11,7 @@
 
 说明：实现以 `src/task_router_graph/` 代码为准；文档用于对齐语义与协作口径。
 
-## Graph 主流程（2026-04-16）
+## Graph 主流程（2026-04-16，含 PySkill 收敛增强）
 
 ```text
 init
@@ -19,14 +19,15 @@ init
   -> (route | update)
   -> (executor | functest | accutest | perftest)
   -> update
-  -> (failure_diagnose | route | final_reply)
+  -> (failure_diagnose | route | pre_reply_collect)
+  -> final_reply
   -> end
 ```
 
 关键分支规则：
 
 1. `collect_workflows`：优先回收已完成异步 workflow；命中状态追问时可直接生成汇总 task 并进入 `update`。
-2. `task.status == running`：进入 `final_reply`，本轮先返回“正在执行”。
+2. `task.status == running`：进入 `pre_reply_collect`，先做活跃任务收敛检查，再进入 `final_reply`。
 3. `task.status == done`：进入 `final_reply`，本轮收敛结束。
 4. `task.status == failed` 且 `failed_retry_count <= max_failed_retries`（默认 3）：进入 `failure_diagnose` 后回 `route`。
 5. 失败超限、路由失败或达到 `max_task_turns`：进入 `final_reply`。
@@ -41,6 +42,8 @@ init
 ### collect_workflows
 
 - 非阻塞回收完成态 workflow future
+- 非阻塞回收 `pyskill` 后台进程完成态
+- 对丢失句柄/已死亡的 `running` pyskill 任务做 failed 收敛
 - 在当前 round 新增 `pyskill_task`
 - 回链源 task：把 source task 改为 `done/failed`，`result` 指向 `pyskill_task(round_id=..., task_id=...)`
 - 对状态追问触发快捷汇总，降低 controller 无效 observe 循环
@@ -62,9 +65,13 @@ init
   - 记录 `dispatch_pyskill` 轨迹
 - `executor` 支持 skill 插件化：
   - 自动扫描 `paths.skills_root/executor/<skill>/SKILL.md`
-  - 注入元数据（`name/description/when_to_use/path/allowed-tools`）到 `EXECUTOR_SKILLS_INDEX`
+  - 注入元数据（`name/description/when_to_use/skill-mode/path/allowed-tools`）到 `EXECUTOR_SKILLS_INDEX`
   - 命中后再 `read path` 加载 skill 正文
   - skill 脚本工具通过 `skill_tool(name,input)` 调用（仅允许当前激活 skill 的 `allowed-tools`）
+- `skill-mode=pyskill` 时：
+  - `skill_tool` 走 `Popen` 非阻塞派发
+  - source task 立即进入 `running`
+  - source task `content` 追加 `[pyskill pid=... run_id=...]` 作为运行引用
 
 ### update
 
@@ -87,6 +94,13 @@ init
 - 写入 `track`：`agent=reply,event=compose`
 - reply 与 failure_diagnose 也复用同一 memory 机制（统一上下文构造）
 
+### pre_reply_collect
+
+- 每轮进入 `final_reply` 前统一执行
+- 回收已完成 pyskill 结果并回填 `pyskill_task`
+- 处理超时任务（`runtime.pyskill_timeout_sec`）并 failed 收敛
+- 处理“进程已死但未回填”场景，避免 source task 长期停在 `running`
+
 ## Skill 注入链路（关键）
 
 1. Graph 层传统一根路径 `paths.skills_root`，再派生 `controller` 与 `executor` 子目录。
@@ -98,12 +112,12 @@ init
 ## 设计亮点
 
 1. 异步非阻塞执行：长任务不阻塞当前对话轮。
-2. 同轮多任务落盘：`pyskill_task` 与后续汇总任务可共存，利于追问场景。
-3. 强一致回链：source task 与异步结果通过可追踪引用关联。
-4. Skill 解耦扩展：executor skill 增删不侵入 graph，实现插件化演进。
-5. 轨迹统一：所有关键行为都落到 `track`，支持 CLI show 和离线复盘。
-6. 策略分层：graph 负责编排，agent 负责决策，schema 负责约束。
-7. 上下文治理：agent memory + 视图压缩共同控制 token 体积与噪声扩散。
+2. Pre-reply 收敛守门：每轮回复前都做活跃任务巡检，避免“已死进程仍显示 running”。
+3. 幂等回填：同一 `run_id` 多入口回收只会落一条终态，降低重复回填风险。
+4. 同轮多任务落盘：`pyskill_task` 与后续汇总任务可共存，利于追问场景。
+5. 强一致回链：source task 与异步结果通过 `run_id + pyskill_task ref` 关联。
+6. Skill 解耦扩展：executor skill 增删不侵入 graph，实现插件化演进。
+7. 轨迹统一：所有关键行为都落到 `track`，支持 CLI show 和离线复盘。
 
 ## CLI 入口
 
