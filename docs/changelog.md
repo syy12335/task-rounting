@@ -6,6 +6,7 @@
 
 | 日期 | 提交 | 主题 | 影响面 |
 |---|---|---|---|
+| 2026-04-16 | - | 后训练验收基线落地（文档 + Mock 数据） | 新增 `docs/post_training_playbook.md` 与 `docs/eval_spec.md`，锁定 E1~E4 靶点与训练前指标口径；新增 `data/mock/phase_a_100` 验收集与 `phase_b_1k` 扩容模板 |
 | 2026-04-16 | - | time_range_info 升级为 Agentic CRAG + 混合检索 | `time_range_info worker graph` 改为 `bootstrap -> hybrid retrieve -> LLM grader -> rewrite loop -> synthesize`；主 graph 本体（`src/task_router_graph/graph.py`）不变，pyskill 负责异步触发与回填；新增 embedding 配置入口并增强静态扫描约束 |
 | 2026-04-16 | - | docs: PySkill 设计稿补充“落地对照 + TODO” | 明确已落地亮点（非阻塞派发、pre-reply 收敛、run_id 幂等）与未落地能力（heartbeat/step 可视化等） |
 | 2026-04-16 | - | 引入 pyskill 模式（skill-mode）与进程巡检回填 | skill_tool 支持非阻塞进程派发；pre-reply 巡检可对死进程/超时自动 failed 收敛；支持重启后 running 任务兜底 |

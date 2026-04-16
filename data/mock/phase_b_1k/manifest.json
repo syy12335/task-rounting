@@ -1,0 +1,21 @@
+{
+  "dataset": "mock_phase_b_1k",
+  "version": "v1.0.0",
+  "phase": "B",
+  "status": "planned_after_phase_a_acceptance",
+  "target_size_range": [
+    1000,
+    1200
+  ],
+  "schema_version": "mock_eval_v1",
+  "compatibility": "must be field-compatible with phase_a_100",
+  "required_fields": [
+    "sample_id",
+    "scenario_id",
+    "seed",
+    "environment_snapshot_id",
+    "error_code",
+    "expected_action"
+  ],
+  "generated_at": null
+}

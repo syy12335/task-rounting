@@ -7,6 +7,7 @@
 - `cases/`: 输入样本（包含历史 case 和新增样本）
 - `environments/`: Environment full state 快照（case_id + rounds + cur_round + updated_at）
 - `rl/`: controller 动作样本（jsonl）
+- `mock/`: 后训练与评测用 mock 数据（分阶段门禁数据集）
 
 ## 约定
 

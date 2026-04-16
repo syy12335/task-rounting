@@ -1,0 +1,25 @@
+{
+  "dataset": "mock_phase_a_100",
+  "version": "v1.0.0",
+  "phase": "A",
+  "status": "ready_for_acceptance",
+  "size": 100,
+  "seed_base": 20260416,
+  "schema_version": "mock_eval_v1",
+  "error_code_coverage": {
+    "E1_ENV_LOOP_READ": 25,
+    "E2_STATUS_REPLY_MISMATCH": 25,
+    "E3_ENV_FACT_IGNORED": 25,
+    "E4_STEP_EXHAUST_NO_TOOL": 25
+  },
+  "required_fields": [
+    "sample_id",
+    "scenario_id",
+    "seed",
+    "environment_snapshot_id",
+    "error_code",
+    "expected_action"
+  ],
+  "replay_contract": "deterministic by sample_id+seed+environment_snapshot_id",
+  "generated_at": "2026-04-16T09:27:20.893129+00:00"
+}
