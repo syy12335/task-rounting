@@ -8,6 +8,12 @@
 - `task.type` 仍保持现有语义（`executor/functest/accutest/perftest` 等）。
 - PySkill 的目标是把长耗时执行从主链路中拆开，并通过 Environment 维持可观测、可回填、可收敛。
 
+### 关系说明（避免概念混淆）
+
+- 主 graph 本体：`src/task_router_graph/graph.py`，负责编排、回收、回填、reply。
+- pyskill：主 graph 下的异步触发与回填机制（dispatch/collect/link），不是独立 graph 本体。
+- worker graph：具体 skill 的执行流程（例如 `time_range_info worker graph`），由被派发的脚本内部实现。
+
 ## 2. 已落地能力（设计亮点）
 
 1. **协议化接入**
