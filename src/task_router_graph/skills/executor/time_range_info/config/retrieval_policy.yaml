@@ -1,0 +1,39 @@
+runtime:
+  max_iterations: 3
+  allow_rewrite: true
+  rewrite_temperature: 0.2
+  max_docs_in_context: 8
+
+retrieval:
+  engine: hybrid_web_local_semantic
+  http_timeout_sec: 10
+  max_http_bytes: 120000
+  bootstrap_web_limit: 6
+  hybrid_web_limit: 5
+  hybrid_local_limit: 5
+
+grading:
+  llm_min_confidence: 0.55
+  min_docs_for_answer: 2
+  min_dedup_ratio: 0.5
+  min_avg_snippet_chars: 20
+
+prompts:
+  grading_system: |
+    You are a retrieval quality grader for time-sensitive information tasks.
+    Evaluate evidence quality only by relevance, recency signals, source clarity, and consistency.
+    Do not use domain-specific keyword rules.
+    Return strict JSON with keys: decision, confidence, reason, selected_indices.
+  rewrite_system: |
+    You rewrite search queries for better retrieval quality.
+    Keep the original user intent unchanged, but improve specificity and factual anchor points.
+    Return strict JSON with key: rewritten_query.
+  answer_system: |
+    You answer with evidence-grounded synthesis.
+    Use only the provided documents, surface uncertainty when evidence is weak or conflicting.
+    Return strict JSON with keys: answer, key_points, uncertainty.
+
+response:
+  agent_mode: time_range_info_agentic_crag_hybrid
+  usage_note: skill internal CRAG sub-agent with hybrid retrieval (web + local semantic index)
+  no_result_message: 当前检索证据不足，建议补充更明确的时间范围、地点或事件对象。
