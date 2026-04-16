@@ -7,6 +7,7 @@ from jsonschema import ValidationError, validate
 
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
 from .memory import AgentMemory, ContextCompressionOptions
+from ..protocol_constants import ARG_INPUT, ARG_NAME, TOOL_SKILL_TOOL
 
 
 _EXECUTOR_OBSERVE_READ_SCHEMA: dict[str, Any] = {
@@ -48,14 +49,14 @@ _EXECUTOR_OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "action_kind": {"const": "observe"},
-        "tool": {"const": "skill_tool"},
+        "tool": {"const": TOOL_SKILL_TOOL},
         "args": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "minLength": 1},
-                "input": {"type": "object"},
+                ARG_NAME: {"type": "string", "minLength": 1},
+                ARG_INPUT: {"type": "object"},
             },
-            "required": ["name", "input"],
+            "required": [ARG_NAME, ARG_INPUT],
             "additionalProperties": False,
         },
         "reason": {"type": "string", "minLength": 1},
@@ -88,13 +89,13 @@ _EXECUTOR_OUTPUT_CONSTRAINTS: dict[str, Any] = {
     "output_format": "json_object",
     "action_kind_enum": ["observe", "finish"],
     "observe_required": ["action_kind", "tool", "args", "reason"],
-    "observe_tool_enum": ["read", "beijing_time", "skill_tool"],
+    "observe_tool_enum": ["read", "beijing_time", TOOL_SKILL_TOOL],
     "finish_required": ["action_kind", "task_status", "task_result", "reason"],
     "forbid_additional_properties": True,
     "observe_tool_args_required": {
         "read": ["path"],
         "beijing_time": [],
-        "skill_tool": ["name", "input"],
+        TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
     },
 }
 
@@ -213,10 +214,10 @@ class ExecutorAgent:
 
             if tool_name == "read" and read_calls >= max_read_calls:
                 observation_result: Any = "ERROR: read quota exceeded in current executor task."
-            elif tool_name == "skill_tool" and skill_tool_calls >= max_skill_tool_calls:
+            elif tool_name == TOOL_SKILL_TOOL and skill_tool_calls >= max_skill_tool_calls:
                 observation_result = (
-                    "ERROR: skill_tool quota exceeded in current executor task. "
-                    "Only use skill_tool when the activated skill explicitly requires it."
+                    f"ERROR: {TOOL_SKILL_TOOL} quota exceeded in current executor task. "
+                    f"Only use {TOOL_SKILL_TOOL} when the activated skill explicitly requires it."
                 )
             elif tool_name == "beijing_time" and beijing_time_calls >= max_beijing_time_calls:
                 observation_result = "ERROR: beijing_time quota exceeded in current executor task."
@@ -229,7 +230,7 @@ class ExecutorAgent:
                         observation_result = tool(**tool_args)
                         if tool_name == "read":
                             read_calls += 1
-                        elif tool_name == "skill_tool":
+                        elif tool_name == TOOL_SKILL_TOOL:
                             skill_tool_calls += 1
                         elif tool_name == "beijing_time":
                             beijing_time_calls += 1

@@ -7,8 +7,9 @@ from typing import Any
 
 import yaml
 
+from ..protocol_constants import FM_ALLOWED_TOOLS, SKILL_FILENAME
 
-REQUIRED_FRONTMATTER_FIELDS = ("name", "description", "when_to_use", "allowed-tools")
+REQUIRED_FRONTMATTER_FIELDS = ("name", "description", "when_to_use", FM_ALLOWED_TOOLS)
 
 
 class SkillRegistryError(ValueError):
@@ -47,18 +48,18 @@ def _parse_frontmatter(skill_path: Path) -> tuple[dict[str, Any], str]:
 
 def _validate_allowed_tools(raw: Any, *, skill_path: Path) -> list[str]:
     if not isinstance(raw, list):
-        raise SkillRegistryError(f"allowed-tools must be a string array: {skill_path}")
+        raise SkillRegistryError(f"{FM_ALLOWED_TOOLS} must be a string array: {skill_path}")
 
     result: list[str] = []
     seen: set[str] = set()
     for item in raw:
         if not isinstance(item, str):
-            raise SkillRegistryError(f"allowed-tools must be a string array: {skill_path}")
+            raise SkillRegistryError(f"{FM_ALLOWED_TOOLS} must be a string array: {skill_path}")
         tool_name = item.strip()
         if not tool_name:
-            raise SkillRegistryError(f"allowed-tools contains empty tool name: {skill_path}")
+            raise SkillRegistryError(f"{FM_ALLOWED_TOOLS} contains empty tool name: {skill_path}")
         if tool_name in seen:
-            raise SkillRegistryError(f"allowed-tools contains duplicate tool name '{tool_name}': {skill_path}")
+            raise SkillRegistryError(f"{FM_ALLOWED_TOOLS} contains duplicate tool name '{tool_name}': {skill_path}")
         seen.add(tool_name)
         result.append(tool_name)
 
@@ -92,7 +93,7 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
         if not skill_dir.is_dir() or skill_dir.name.startswith("."):
             continue
 
-        skill_file = skill_dir / "SKILL.md"
+        skill_file = skill_dir / SKILL_FILENAME
         if not skill_file.exists() or not skill_file.is_file():
             continue
 
@@ -105,7 +106,7 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
         name = str(frontmatter.get("name", "")).strip()
         description = str(frontmatter.get("description", "")).strip()
         when_to_use = str(frontmatter.get("when_to_use", "")).strip()
-        allowed_tools = _validate_allowed_tools(frontmatter.get("allowed-tools"), skill_path=skill_file)
+        allowed_tools = _validate_allowed_tools(frontmatter.get(FM_ALLOWED_TOOLS), skill_path=skill_file)
 
         if not name:
             raise SkillRegistryError(f"field 'name' must be non-empty: {skill_file}")
@@ -156,10 +157,9 @@ def build_skill_registry_text(*, catalog: dict[str, dict[str, Any]], agent: str)
                 "description": str(entry.get("description", "")).strip(),
                 "when_to_use": str(entry.get("when_to_use", "")).strip(),
                 "path": str(entry.get("path", "")).strip(),
-                "allowed-tools": list(entry.get("allowed_tools", [])),
+                FM_ALLOWED_TOOLS: list(entry.get("allowed_tools", [])),
             }
         )
 
     return "\n\n".join([title, json.dumps(entries, ensure_ascii=False, indent=2)]).strip()
-
 

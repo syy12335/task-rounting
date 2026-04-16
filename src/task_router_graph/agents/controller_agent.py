@@ -7,6 +7,7 @@ from jsonschema import ValidationError, validate
 
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
 from .memory import AgentMemory, ContextCompressionOptions
+from ..protocol_constants import ARG_INPUT, ARG_NAME, TOOL_SKILL_TOOL
 
 
 _OBSERVE_READ_SCHEMA: dict[str, Any] = {
@@ -107,14 +108,14 @@ _OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "action_kind": {"const": "observe"},
-        "tool": {"const": "skill_tool"},
+        "tool": {"const": TOOL_SKILL_TOOL},
         "args": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "minLength": 1},
-                "input": {"type": "object"},
+                ARG_NAME: {"type": "string", "minLength": 1},
+                ARG_INPUT: {"type": "object"},
             },
-            "required": ["name", "input"],
+            "required": [ARG_NAME, ARG_INPUT],
             "additionalProperties": False,
         },
         "reason": {"type": "string", "minLength": 1},
@@ -159,7 +160,7 @@ _OUTPUT_CONSTRAINTS: dict[str, Any] = {
         "build_context_view",
         "previous_failed_track",
         "beijing_time",
-        "skill_tool",
+        TOOL_SKILL_TOOL,
     ],
     "generate_task_required": ["action_kind", "task_type", "task_content", "reason"],
     "forbid_additional_properties": True,
@@ -169,7 +170,7 @@ _OUTPUT_CONSTRAINTS: dict[str, Any] = {
         "build_context_view": [],
         "previous_failed_track": [],
         "beijing_time": [],
-        "skill_tool": ["name", "input"],
+        TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
     },
 }
 

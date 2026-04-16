@@ -7,6 +7,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .protocol_constants import (
+    ARG_INPUT,
+    ARG_NAME,
+    ERR_SKILL_TOOL_INPUT_NOT_OBJECT,
+    ERR_SKILL_TOOL_NAME_EMPTY,
+    ERR_SKILL_TOOL_NOT_ACTIVATED,
+    ERR_SKILL_TOOL_NOT_ALLOWED_TEMPLATE,
+    ERR_SKILL_TOOL_SCRIPT_NOT_CONFIGURED_TEMPLATE,
+    SKILL_FILENAME,
+    TOOL_SKILL_TOOL,
+)
 from .agents import (
     ControllerRouteError,
     route_task,
@@ -197,7 +208,7 @@ class SkillToolRuntime:
 
     def activate_from_read_path(self, *, raw_path: str) -> None:
         raw_value = str(raw_path).strip()
-        if not raw_value or Path(raw_value).name != "SKILL.md":
+        if not raw_value or Path(raw_value).name != SKILL_FILENAME:
             return
 
         try:
@@ -212,28 +223,29 @@ class SkillToolRuntime:
     def run(self, *, name: str, input_payload: Any) -> str:
         tool_name = str(name).strip()
         if not tool_name:
-            return "ERROR: skill_tool requires non-empty tool name"
+            return ERR_SKILL_TOOL_NAME_EMPTY
 
         if not isinstance(input_payload, dict):
-            return "ERROR: skill_tool.input must be a JSON object"
+            return ERR_SKILL_TOOL_INPUT_NOT_OBJECT
 
         active_skill = self.active_skill
         if active_skill is None:
-            return "ERROR: skill_tool requires an activated skill. Read a skill SKILL.md first."
+            return ERR_SKILL_TOOL_NOT_ACTIVATED
 
         allowed_tools = active_skill.get("allowed_tools", [])
         if tool_name not in allowed_tools:
-            return (
-                f"ERROR: skill_tool '{tool_name}' is not allowed by active skill "
-                f"{active_skill.get('name', '<unknown>')}. allowed-tools={allowed_tools}"
+            return ERR_SKILL_TOOL_NOT_ALLOWED_TEMPLATE.format(
+                tool_name=tool_name,
+                skill_name=active_skill.get("name", "<unknown>"),
+                allowed_tools=allowed_tools,
             )
 
         scripts_abs = active_skill.get("scripts_abs", {})
         script_path = str(scripts_abs.get(tool_name, "")).strip()
         if not script_path:
-            return (
-                f"ERROR: skill_tool script is not configured for tool '{tool_name}' in "
-                f"skill {active_skill.get('name', '<unknown>')}"
+            return ERR_SKILL_TOOL_SCRIPT_NOT_CONFIGURED_TEMPLATE.format(
+                tool_name=tool_name,
+                skill_name=active_skill.get("name", "<unknown>"),
             )
 
         command = ["bash", script_path] if script_path.endswith(".sh") else [sys.executable, script_path]
@@ -311,13 +323,12 @@ class SkillToolRuntime:
 def _tool_skill_tool(
     *,
     skill_runtime: SkillToolRuntime,
-    name: str = "",
     input_payload: Any = None,
-    input: Any = None,
-    **_: Any,
+    **kwargs: Any,
 ) -> str:
-    payload = input_payload if input_payload is not None else input
-    return skill_runtime.run(name=name, input_payload=payload)
+    tool_name = str(kwargs.get(ARG_NAME, "")).strip()
+    payload = input_payload if input_payload is not None else kwargs.get(ARG_INPUT)
+    return skill_runtime.run(name=tool_name, input_payload=payload)
 
 
 def _tool_read_with_skill_activation(*, workspace_root: Path, skill_runtime: SkillToolRuntime, path: str = "") -> str:
@@ -354,7 +365,7 @@ def _build_observe_tools(
         "beijing_time": lambda **kwargs: _tool_beijing_time(
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"})
         ),
-        "skill_tool": lambda **kwargs: _tool_skill_tool(
+        TOOL_SKILL_TOOL: lambda **kwargs: _tool_skill_tool(
             skill_runtime=skill_runtime,
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"}),
         ),
@@ -835,7 +846,7 @@ def _build_executor_tools(*, workspace_root: Path, skill_runtime: SkillToolRunti
         "beijing_time": lambda **kwargs: _tool_beijing_time(
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"})
         ),
-        "skill_tool": lambda **kwargs: _tool_skill_tool(
+        TOOL_SKILL_TOOL: lambda **kwargs: _tool_skill_tool(
             skill_runtime=skill_runtime,
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"}),
         ),
