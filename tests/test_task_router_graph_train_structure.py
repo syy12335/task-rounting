@@ -52,6 +52,7 @@ def test_train_module_cli_smoke(tmp_path: Path) -> None:
     dataset_dir = TRAIN_ROOT / "assets" / "eval_samples" / "k20_manual"
     output_root = tmp_path / "assets_out"
     output_dir = tmp_path / "reports"
+    sft_output_root = tmp_path / "sft_assets"
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SRC_ROOT)
     build_cmd = [
@@ -74,6 +75,25 @@ def test_train_module_cli_smoke(tmp_path: Path) -> None:
     )
     assert build_proc.returncode == 0, build_proc.stderr
 
+    build_sft_cmd = [
+        sys.executable,
+        "-m",
+        "task_router_graph_train.cli.build_sft_assets",
+        "--output-root",
+        str(sft_output_root),
+        "--runtime-root",
+        str(REPO_ROOT),
+    ]
+    build_sft_proc = subprocess.run(
+        build_sft_cmd,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert build_sft_proc.returncode == 0, build_sft_proc.stderr
+    assert (sft_output_root / "examples" / "controller_sft_train.jsonl").exists()
+
     evaluate_cmd = [
         sys.executable,
         "-m",
@@ -95,3 +115,19 @@ def test_train_module_cli_smoke(tmp_path: Path) -> None:
     assert eval_proc.returncode == 0, eval_proc.stderr
     assert (output_dir / "metrics_summary.json").exists()
     assert (output_dir / "evidence_samples.jsonl").exists()
+
+    train_help_cmd = [
+        sys.executable,
+        "-m",
+        "task_router_graph_train.cli.train_sft",
+        "--help",
+    ]
+    train_help_proc = subprocess.run(
+        train_help_cmd,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert train_help_proc.returncode == 0, train_help_proc.stderr
+    assert "--model-name-or-path" in train_help_proc.stdout

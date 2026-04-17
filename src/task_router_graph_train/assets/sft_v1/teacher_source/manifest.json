@@ -1,0 +1,25 @@
+{
+  "dataset": "task_router_graph_train_controller_sft_teacher_bootstrap",
+  "version": "v1.0.0",
+  "train_size": 12,
+  "eval_size": 4,
+  "action_space": [
+    "observe",
+    "generate_task"
+  ],
+  "scenarios": [
+    "functest",
+    "accutest",
+    "perftest",
+    "summary",
+    "retry_failed_task",
+    "status_followup",
+    "async_running_status",
+    "history_summary"
+  ],
+  "notes": [
+    "Bootstrap teacher source for controller SFT warm start.",
+    "Only observe and generate_task are covered in v1.",
+    "Legacy controller_train.jsonl remains a later expansion reference and is not the default source here."
+  ]
+}

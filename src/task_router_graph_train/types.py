@@ -33,6 +33,7 @@ class TrainingRecord:
     verifier_sidecar: VerifierSidecar
     reward_spec_id: str
     split: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class TrainingRecord:
             "verifier_sidecar": self.verifier_sidecar.to_dict(),
             "reward_spec_id": self.reward_spec_id,
             "split": self.split,
+            "metadata": dict(self.metadata),
         }
 
 
@@ -83,4 +85,22 @@ class EvalManifest:
             "roles": list(self.roles),
             "reward_spec_ids": list(self.reward_spec_ids),
             "notes": list(self.notes),
+        }
+
+
+@dataclass
+class SftExample:
+    sample_id: str
+    split: str
+    prompt: str
+    target_text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sample_id": self.sample_id,
+            "split": self.split,
+            "prompt": self.prompt,
+            "target_text": self.target_text,
+            "metadata": dict(self.metadata),
         }

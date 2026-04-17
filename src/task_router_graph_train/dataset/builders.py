@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
-from ..reward_specs import GRAPH_EVAL_SPEC_ID
+from ..reward_specs import CONTROLLER_REWARD_SPEC_ID, GRAPH_EVAL_SPEC_ID
 from ..runtime_adapter import ASSETS_ROOT, REPO_ROOT, build_controller_state_input, build_reply_state_input
-from ..types import EvalManifest, TrainingRecord, VerifierSidecar
+from ..types import EvalManifest, SftExample, TrainingRecord, VerifierSidecar
 from .io import read_jsonl, write_jsonl
 
 FORMAL_ENVIRONMENT_KEYS = (
@@ -39,6 +40,10 @@ RAW_SAMPLE_FILE_SCENARIOS = "scenarios.jsonl"
 RAW_SAMPLE_FILE_SNAPSHOTS = "snapshots.jsonl"
 RAW_SAMPLE_FILE_LABELS = "labels.jsonl"
 DEFAULT_K20_DATASET_DIR = ASSETS_ROOT / "eval_samples" / "k20_manual"
+DEFAULT_SFT_TEACHER_SOURCE_DIR = ASSETS_ROOT / "sft_v1" / "teacher_source"
+DEFAULT_SFT_OUTPUT_ROOT = ASSETS_ROOT / "sft_v1"
+RAW_SAMPLE_FILE_TEACHER_TRAIN = "teacher_train.jsonl"
+RAW_SAMPLE_FILE_TEACHER_EVAL = "teacher_eval.jsonl"
 
 K20_SCENARIO_LEADERBOARDS: dict[str, list[str]] = {
     "s01_status_running_progress": ["reply_core"],
@@ -65,6 +70,8 @@ K20_SCENARIO_LEADERBOARDS: dict[str, list[str]] = {
 
 
 def sanitize_environment_payload(environment_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    # 这里把正式 environment 和 verifier sidecar 明确切开：
+    # 前者给模型看，后者只留给评测器和训练分析使用。
     formal_payload: dict[str, Any] = {}
     sidecar_payload: dict[str, Any] = {}
     for key, value in environment_payload.items():
@@ -131,6 +138,8 @@ def load_eval_sample_triplets(dataset_dir: Path | None = None) -> list[dict[str,
 
 
 def rewrite_k20_snapshots_with_sidecar(dataset_dir: Path | None = None) -> list[dict[str, Any]]:
+    # 这一步的核心目的是把 evaluator 私货移出模型可见输入，
+    # 避免训练或评测时出现 sidecar 泄漏。
     resolved_dir = (dataset_dir or DEFAULT_K20_DATASET_DIR).resolve()
     snapshot_path = resolved_dir / RAW_SAMPLE_FILE_SNAPSHOTS
     snapshot_rows = read_jsonl(snapshot_path)
@@ -160,6 +169,8 @@ def build_k20_holdout_records(
     dataset_dir: Path | None = None,
     workspace_root: Path | None = None,
 ) -> tuple[list[TrainingRecord], EvalManifest]:
+    # 这里构建的是 graph_eval 专用 holdout，不是 controller 训练集。
+    # 它的任务是给 evaluator 提供稳定门禁，而不是直接喂给训练器做优化。
     resolved_dir = (dataset_dir or DEFAULT_K20_DATASET_DIR).resolve()
     runtime_root = (workspace_root or REPO_ROOT).resolve()
     bundles = load_eval_sample_triplets(resolved_dir)
@@ -207,6 +218,8 @@ def build_k20_holdout_records(
                 ),
                 environment_extras=copy.deepcopy(snapshot.get("verifier_sidecar", {})),
                 runtime_shape_preview={
+                    # preview 仍然留在 sidecar 里，只给 verifier / 教学用途查看，
+                    # 不能反向喂给 graph_eval 模式下的模型输入。
                     "controller": build_controller_state_input(
                         user_input=str(scenario.get("user_input", "")),
                         environment_payload=environment_payload,
@@ -233,6 +246,173 @@ def build_k20_holdout_records(
     return records, manifest
 
 
+def build_controller_train_records(
+    *,
+    teacher_source_dir: Path | None = None,
+    workspace_root: Path | None = None,
+) -> tuple[list[TrainingRecord], dict[str, Any]]:
+    resolved_dir = (teacher_source_dir or DEFAULT_SFT_TEACHER_SOURCE_DIR).resolve()
+    runtime_root = (workspace_root or REPO_ROOT).resolve()
+    manifest_path = resolved_dir / "manifest.json"
+    raw_manifest: dict[str, Any] = {}
+    if manifest_path.exists():
+        loaded_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded_manifest, dict):
+            raise ValueError(f"teacher source manifest must be an object: {manifest_path}")
+        raw_manifest = loaded_manifest
+
+    records: list[TrainingRecord] = []
+    counts_by_split = {"train": 0, "eval": 0}
+    seen_sample_ids: set[str] = set()
+    split_files = {
+        "train": RAW_SAMPLE_FILE_TEACHER_TRAIN,
+        "eval": RAW_SAMPLE_FILE_TEACHER_EVAL,
+    }
+    for split, filename in split_files.items():
+        source_path = resolved_dir / filename
+        for row in read_jsonl(source_path):
+            sample_id = str(row.get("sample_id", "")).strip()
+            if not sample_id:
+                raise ValueError(f"sample_id is required: {source_path}")
+            if sample_id in seen_sample_ids:
+                raise ValueError(f"duplicate sample_id in teacher source: {sample_id}")
+            seen_sample_ids.add(sample_id)
+
+            environment_payload = row.get("environment", {})
+            if not isinstance(environment_payload, dict):
+                raise ValueError(f"environment must be an object: {sample_id}")
+            formal_environment, verifier_extras = sanitize_environment_payload(environment_payload)
+            state_input = build_controller_state_input(
+                user_input=str(row.get("user_input", "")),
+                environment_payload=formal_environment,
+                workspace_root=runtime_root,
+            )
+            target_action = row.get("target_action", {})
+            if not isinstance(target_action, dict):
+                raise ValueError(f"target_action must be an object: {sample_id}")
+
+            record = TrainingRecord(
+                sample_id=sample_id,
+                role=ROLE_CONTROLLER,
+                split=split,
+                reward_spec_id=CONTROLLER_REWARD_SPEC_ID,
+                state_input=state_input,
+                gold_output=copy.deepcopy(target_action),
+                verifier_sidecar=VerifierSidecar(
+                    environment_snapshot_id=str(row.get("environment_snapshot_id", "")).strip(),
+                    environment_extras=verifier_extras,
+                ),
+                metadata={
+                    "step": int(row.get("step", 0) or 0),
+                    "terminal": bool(row.get("terminal", False)),
+                    "allowed_action_kinds": list(row.get("allowed_action_kinds", [])),
+                    "reward": float(row.get("reward", 0.0) or 0.0),
+                    "source_dataset": str(raw_manifest.get("dataset", "teacher_bootstrap_controller_sft")),
+                    "curriculum_stage": str(row.get("curriculum_stage", "")),
+                    "teacher_note": str(row.get("teacher_note", "")),
+                },
+            )
+            records.append(record)
+            counts_by_split[split] += 1
+
+    _validate_teacher_manifest(raw_manifest, counts_by_split=counts_by_split)
+
+    manifest = {
+        "dataset": str(raw_manifest.get("dataset", "task_router_graph_train_controller_sft_teacher_bootstrap")),
+        "version": str(raw_manifest.get("version", "v1.0.0")),
+        "record_count": len(records),
+        "counts_by_split": counts_by_split,
+        "roles": [ROLE_CONTROLLER],
+        "reward_spec_ids": [CONTROLLER_REWARD_SPEC_ID],
+        "action_space": list(raw_manifest.get("action_space", ["observe", "generate_task"])),
+        "scenarios": list(raw_manifest.get("scenarios", [])),
+        "notes": list(raw_manifest.get("notes", [])),
+    }
+    return records, manifest
+
+
+def build_controller_sft_examples(records: list[TrainingRecord]) -> list[SftExample]:
+    examples: list[SftExample] = []
+    for record in records:
+        if record.role != ROLE_CONTROLLER:
+            raise ValueError(f"controller SFT only supports controller records: {record.sample_id}")
+        examples.append(
+            SftExample(
+                sample_id=record.sample_id,
+                split=record.split,
+                prompt=render_controller_prompt(record.state_input),
+                target_text=render_controller_target_text(record.gold_output),
+                metadata=copy.deepcopy(record.metadata),
+            )
+        )
+    return examples
+
+
+def render_controller_prompt(state_input: dict[str, Any]) -> str:
+    user_input = str(state_input.get("USER_INPUT", ""))
+    tasks_payload = state_input.get("TASKS_JSON", {})
+    skills_index = str(state_input.get("SKILLS_INDEX", "")).strip()
+    tasks_json = json.dumps(tasks_payload, ensure_ascii=False, indent=2)
+    return "\n".join(
+        [
+            "你是 task_router_graph 的 controller。",
+            "请阅读下面的训练态 state，并只输出一个 JSON 对象。",
+            "不要输出解释、不要输出 markdown，只输出结构化动作。",
+            "",
+            "USER_INPUT",
+            user_input,
+            "",
+            "TASKS_JSON",
+            tasks_json,
+            "",
+            "SKILLS_INDEX",
+            skills_index,
+        ]
+    ).strip()
+
+
+def render_controller_target_text(target_action: dict[str, Any]) -> str:
+    return json.dumps(target_action, ensure_ascii=False, indent=2)
+
+
+def write_controller_sft_assets(
+    *,
+    output_root: Path,
+    records: list[TrainingRecord],
+    manifest: dict[str, Any],
+) -> dict[str, Path]:
+    output_root.mkdir(parents=True, exist_ok=True)
+    records_dir = output_root / "records"
+    examples_dir = output_root / "examples"
+    records_dir.mkdir(parents=True, exist_ok=True)
+    examples_dir.mkdir(parents=True, exist_ok=True)
+
+    train_records = [record for record in records if record.split == "train"]
+    eval_records = [record for record in records if record.split == "eval"]
+    examples = build_controller_sft_examples(records)
+    train_examples = [row for row in examples if row.split == "train"]
+    eval_examples = [row for row in examples if row.split == "eval"]
+
+    record_train_path = records_dir / "controller_train_records.jsonl"
+    record_eval_path = records_dir / "controller_eval_records.jsonl"
+    example_train_path = examples_dir / "controller_sft_train.jsonl"
+    example_eval_path = examples_dir / "controller_sft_eval.jsonl"
+    manifest_path = output_root / "manifest.json"
+
+    write_jsonl(record_train_path, train_records)
+    write_jsonl(record_eval_path, eval_records)
+    write_jsonl(example_train_path, train_examples)
+    write_jsonl(example_eval_path, eval_examples)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {
+        "record_train_path": record_train_path,
+        "record_eval_path": record_eval_path,
+        "example_train_path": example_train_path,
+        "example_eval_path": example_eval_path,
+        "manifest_path": manifest_path,
+    }
+
+
 def _index_rows_by_sample_id(rows: list[dict[str, Any]], *, source_name: str) -> dict[str, dict[str, Any]]:
     indexed: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -243,6 +423,27 @@ def _index_rows_by_sample_id(rows: list[dict[str, Any]], *, source_name: str) ->
             raise ValueError(f"duplicate sample_id in {source_name}: {sample_id}")
         indexed[sample_id] = copy.deepcopy(row)
     return indexed
+
+
+def _validate_teacher_manifest(
+    raw_manifest: dict[str, Any],
+    *,
+    counts_by_split: dict[str, int],
+) -> None:
+    if not raw_manifest:
+        return
+    expected_train = int(raw_manifest.get("train_size", counts_by_split["train"]) or 0)
+    expected_eval = int(raw_manifest.get("eval_size", counts_by_split["eval"]) or 0)
+    if expected_train != counts_by_split["train"]:
+        raise ValueError(
+            f"teacher source manifest train_size mismatch: expected {expected_train}, "
+            f"got {counts_by_split['train']}"
+        )
+    if expected_eval != counts_by_split["eval"]:
+        raise ValueError(
+            f"teacher source manifest eval_size mismatch: expected {expected_eval}, "
+            f"got {counts_by_split['eval']}"
+        )
 
 
 def _build_expected_final_task(bundle: dict[str, Any]) -> dict[str, Any]:
