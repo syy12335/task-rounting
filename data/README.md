@@ -1,14 +1,13 @@
 # Data Directory
 
-本项目开发与评测数据统一放在 `data/`。
+本目录只保留项目级共享数据与历史归档。
 
 ## 当前主目录
 
-- `eval_samples/`: 后训练评测主入口（统一样本口径，不区分 mock/real）
 - `archive_legacy/`: 历史数据归档（可回溯，不参与当前主评测）
 
 ## 约定
 
-1. 新评测样本统一写入 `data/eval_samples`。
-2. 历史目录 `cases/environments/rl/mock` 已迁移到 `archive_legacy`。
-3. 运行过程输出仍写入 `var/runs`。
+1. 历史目录 `cases/environments/rl/mock` 已迁移到 `archive_legacy`。
+2. 运行过程输出仍写入 `var/runs`。
+3. 训练模块相关样本、holdout、reward spec 与评测输出已迁入 `src/task_router_graph_train/assets/`。

@@ -12,4 +12,4 @@
 
 1. 与 `phase_a_100` 字段完全兼容
 2. 样本规模 1000~1200
-3. 通过 `docs/eval_spec.md` 中的稳定性门禁
+3. 通过训练模块 `src/task_router_graph_train/docs/eval_spec.md` 中的稳定性门禁
