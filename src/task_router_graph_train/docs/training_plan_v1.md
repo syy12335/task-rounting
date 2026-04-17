@@ -2,75 +2,113 @@
 
 ## 目标
 
-本期目标不是“让模型更会回答”，而是让模型稳定读懂正式 `environment/task/round/track` 机制，并在 `controller/reply` 两个角色上做出正确动作与状态语义。
+本期目标不是把完整训练引擎一次性做完，而是把 `controller-only` 的 RL v1 路线定义清楚，并和现有 harness / evaluator 边界对齐。
 
-## 为什么要拆训练和运行
+v1 只解决一件事：
 
-1. 运行时包应该只承载产品执行逻辑。
-2. RL 方案仍然可能继续演进，不应该把实验性 contract、holdout、verifier 直接打进运行时包。
-3. 训练侧需要更快迭代样本、reward 和评测口径，而运行时语义需要保持稳定。
+- 让模型稳定读懂正式 `environment/task/round/track` 机制
+- 在 `controller` 角色上输出结构化、可校验、环境事实对齐的下一步动作
 
-## v1 训练路线
+## 模块边界
 
-采用 `离线 RL 优先`：
+正式训练与评测真源继续放在 `src/task_router_graph_train/`。
 
-1. `Stage 0` 数据清洗：统一成正式 environment + verifier sidecar
-2. `Stage 1` SFT warm start：先拉到可优化区间
-3. `Stage 2` controller batch RL：`1-3 step micro-episode`
-4. `Stage 3` reply batch RL：contextual bandit
+- `docs/`
+  - 对团队有效的正式设计文档
+- `dataset/`
+  - 正式训练样本与 holdout 的构建逻辑
+- `reward_specs/`
+  - 程序化奖励与评测口径
+- `cli/`
+  - 可重复执行的正式命令入口
 
-本期不做：
+个人学习与实验材料不放在正式 docs 中，而是放在仓库根下的 `.private/task_router_graph_train/`。
 
-- 在线 RL
-- reward model
-- 全链路 PPO
-- executor RL
+## v1 范围
 
-## 角色边界
-
-### 进入 RL
+进入 v1 训练：
 
 - `controller`
+
+本期不进入训练：
+
 - `reply`
-
-### 只评测不进 RL
-
 - `graph_deterministic`
 - `executor_guardrail`
+- 在线 RL
+- reward model
+- PPO / GRPO / 全链路 graph policy 优化
 
-这些部分仍然重要，但它们是确定性机制或 guardrail，不应在 v1 里交给 RL 学。
+## 训练路线
 
-## 奖励设计
+固定为两阶段：
 
-程序化 reward 落在：
+1. `SFT warm start`
+   - 把 controller 拉到可优化区间
+   - 重点先解决 JSON schema、动作类别和环境事实引用
+2. `offline RL`
+   - 对同一 state 采样多个候选动作
+   - 用 `controller_v1` 程序化奖励打分
+   - 用 reward-weighted policy improvement 做小步更新
+
+本期 episode 语义固定为：
+
+- `1-3 step micro-episode`
+
+本期训练输入固定使用：
+
+- `build_controller_state_input(...)`
+
+本期默认动作空间固定为：
+
+- `observe`
+- `generate_task`
+
+## 奖励与门禁
+
+controller 奖励继续使用：
 
 - `assets/rl_v1/reward_specs/controller_v1.json`
-- `assets/rl_v1/reward_specs/reply_v1.json`
-- `assets/rl_v1/reward_specs/graph_eval_v1.json`
-- `assets/rl_v1/reward_specs/executor_guardrail_v1.json`
 
-controller 关注：
+重点关注的程序化项：
 
-- schema 合法
-- 动作类型正确
-- 工具或 task 类型正确
-- 正式 environment 事实使用
-- observe 预算合理
-- 最终 next action 等价
+- `schema_valid`
+- `action_kind_correct`
+- `tool_or_task_type_correct`
+- `formal_env_fact_used`
+- `observe_budget_ok`
+- `next_action_equivalent`
+- `repeated_observe`
+- `sidecar_leak`
+- `hallucinated_fact`
 
-reply 关注：
+阶段门禁与正式评测口径继续以：
 
-- 状态语义正确
-- source task / pyskill_task 链接解析
-- grounded reply
-- 幻觉率
+- `docs/eval_spec.md`
+- `configs/curriculum_v1.json`
 
-## 课程顺序
+为准。
 
-固定顺序：
+## 学习与实现分层
 
-1. `P0` 状态机理解
-2. `P1` 失败重试 / 异步回填
-3. `P2` 长历史与压缩视图稳健性
+学习与引导采用 notebook-first：
 
-详细配比和阈值在 `configs/curriculum_v1.json`。
+- `.private/task_router_graph_train/README.md`
+- `.private/task_router_graph_train/notebooks/`
+- `.private/task_router_graph_train/notes/`
+
+正式实现沉淀顺序固定为：
+
+1. 先在 notebook 中把数据、reward、offline RL 流程走通
+2. 再把稳定逻辑沉淀到 `dataset/`、训练模块和 `cli/`
+3. 最终用现有 evaluator 和 holdout 做门禁
+
+## 后续正式入口
+
+v1 完整实现后应补齐的正式入口包括：
+
+- `build_controller_train_records(...)`
+- `score_controller_action(...)`
+- `train_controller_sft(...)`
+- `train_controller_rl(...)`
+- `evaluate_controller_policy(...)`
