@@ -5,7 +5,7 @@
 ## 子目录
 
 - `eval_samples/`: 人工维护的样本源
-- `sft_v1/teacher_source/`: controller SFT 的 teacher bootstrap 真源
+- `sft_v1/teacher_source/`: controller SFT 的最小 teacher_source 真源
 - `sft_v1/records/`: `build_sft_assets` 生成的标准训练 records
 - `sft_v1/examples/`: `build_sft_assets` 生成的 SFT prompt/target 样本
 - `rl_v1/holdout/`: 清洗后的正式 holdout

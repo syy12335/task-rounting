@@ -2,7 +2,7 @@
 
 `task_router_graph_train` 是 `task_router_graph` 的训练与离线评测模块，不是产品运行模块。
 
-它当前承接的是训练侧骨架加最小 `controller SFT warm start` 闭环：已经有运行时输入适配、样本清洗、teacher bootstrap 数据、SFT examples 构建、LoRA 训练 CLI、reward spec 和离线 evaluator；还没有 `train_rl`、checkpoint 恢复训练和 reply 训练链路。
+它当前承接的是训练侧骨架加最小 `controller SFT warm start` 闭环：已经有运行时输入适配、样本清洗、最小 teacher_source 数据、SFT examples 构建、LoRA 训练 CLI、reward spec 和离线 evaluator；还没有 `train_rl`、checkpoint 恢复训练和 reply 训练链路。
 
 ## 当前有什么
 
@@ -19,7 +19,7 @@
 - `train/`
   - 提供最小 `controller SFT` 训练器、prompt masking 和 LoRA 训练入口
 - `assets/`
-  - 存放样本源、teacher bootstrap、holdout、reward spec 和默认 reports 目录
+  - 存放样本源、最小 teacher_source、holdout、reward spec 和默认 reports 目录
 - `configs/`
   - 存放课程顺序、配比和门禁阈值
 

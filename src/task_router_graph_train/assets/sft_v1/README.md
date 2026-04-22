@@ -5,7 +5,7 @@
 ## 目录
 
 - `teacher_source/`
-  - 手工编写的小份 teacher bootstrap 样本
+  - 手工编写的小份 teacher_source 样本，只保留当前 controller SFT 需要的最小字段
 - `records/`
   - `build_sft_assets` 生成的标准 `TrainingRecord`
 - `examples/`
@@ -14,6 +14,8 @@
 ## 使用顺序
 
 1. 先维护 `teacher_source/`
+   - raw row 只保留：`sample_id / step / terminal / user_input / environment / target_action`
+   - `manifest.json` 只保留：`dataset / version / train_size / eval_size / action_space`
 2. 再运行：
 
 ```bash

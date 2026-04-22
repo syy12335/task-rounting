@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -22,6 +23,15 @@ class FakeTokenizer:
         return [index + 1 for index, _ in enumerate(text)]
 
 
+def _write_teacher_source_fixture(tmp_path: Path) -> Path:
+    source_dir = ASSETS_ROOT / "sft_v1" / "teacher_source"
+    fixture_dir = tmp_path / "teacher_source"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("manifest.json", "teacher_train.jsonl", "teacher_eval.jsonl"):
+        (fixture_dir / name).write_text((source_dir / name).read_text(encoding="utf-8"), encoding="utf-8")
+    return fixture_dir
+
+
 def test_build_controller_train_records_from_teacher_source() -> None:
     records, manifest = build_controller_train_records(
         teacher_source_dir=ASSETS_ROOT / "sft_v1" / "teacher_source",
@@ -36,8 +46,9 @@ def test_build_controller_train_records_from_teacher_source() -> None:
     sample = next(record for record in records if record.sample_id == "teacher_train_009_retry_failed_task_step1")
     assert set(sample.state_input) == {"USER_INPUT", "ENVIRONMENT_JSON", "SKILLS_INDEX"}
     assert "running_refs" not in json.dumps(sample.state_input, ensure_ascii=False)
-    assert sample.metadata["allowed_action_kinds"] == ["observe", "generate_task"]
+    assert sample.metadata == {"step": 1, "terminal": False}
     assert sample.gold_output["action_kind"] == "generate_task"
+    assert manifest["action_space"] == ["observe", "generate_task"]
 
 
 def test_build_controller_sft_examples_contains_prompt_sections() -> None:
@@ -55,6 +66,81 @@ def test_build_controller_sft_examples_contains_prompt_sections() -> None:
     target_json = json.loads(example.target_text)
     assert isinstance(target_json, dict)
     assert target_json["action_kind"] == "generate_task"
+    assert example.metadata == {"step": 1, "terminal": False}
+
+
+def test_build_controller_train_records_rejects_action_kind_outside_manifest(tmp_path: Path) -> None:
+    fixture_dir = _write_teacher_source_fixture(tmp_path)
+    rows = [json.loads(line) for line in (fixture_dir / "teacher_train.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows[0]["target_action"]["action_kind"] = "reply"
+    (fixture_dir / "teacher_train.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        build_controller_train_records(
+            teacher_source_dir=fixture_dir,
+            workspace_root=REPO_ROOT,
+        )
+    except ValueError as exc:
+        assert "target_action.action_kind must be one of" in str(exc)
+    else:
+        raise AssertionError("expected action kind validation to fail")
+
+
+def test_build_controller_train_records_requires_minimal_manifest_contract(tmp_path: Path) -> None:
+    fixture_dir = _write_teacher_source_fixture(tmp_path)
+    manifest = json.loads((fixture_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["notes"] = ["legacy field should fail"]
+    (fixture_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    try:
+        build_controller_train_records(
+            teacher_source_dir=fixture_dir,
+            workspace_root=REPO_ROOT,
+        )
+    except ValueError as exc:
+        assert "unexpected teacher source manifest keys" in str(exc)
+    else:
+        raise AssertionError("expected minimal manifest validation to fail")
+
+
+def test_build_controller_train_records_requires_step_and_terminal_only_contract(tmp_path: Path) -> None:
+    fixture_dir = _write_teacher_source_fixture(tmp_path)
+    rows = [json.loads(line) for line in (fixture_dir / "teacher_train.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    missing_step_rows = copy.deepcopy(rows)
+    del missing_step_rows[0]["step"]
+    (fixture_dir / "teacher_train.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in missing_step_rows) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        build_controller_train_records(
+            teacher_source_dir=fixture_dir,
+            workspace_root=REPO_ROOT,
+        )
+    except ValueError as exc:
+        assert "missing teacher source row keys" in str(exc)
+    else:
+        raise AssertionError("expected missing step validation to fail")
+
+    extra_key_rows = copy.deepcopy(rows)
+    extra_key_rows[0]["reward"] = 1.0
+    (fixture_dir / "teacher_train.jsonl").write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in extra_key_rows) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        build_controller_train_records(
+            teacher_source_dir=fixture_dir,
+            workspace_root=REPO_ROOT,
+        )
+    except ValueError as exc:
+        assert "unexpected teacher source row keys" in str(exc)
+    else:
+        raise AssertionError("expected extra key validation to fail")
 
 
 def test_build_sft_token_labels_masks_prompt_tokens() -> None:
@@ -87,7 +173,7 @@ def test_tokenize_sft_example_uses_only_target_tokens_for_loss() -> None:
     prompt_length = len(FakeTokenizer().encode(example.prompt))
     assert feature_row["labels"][:prompt_length] == [-100] * prompt_length
     assert feature_row["labels"][-1] == FakeTokenizer.eos_token_id
-    assert feature_row["metadata"]["step"] == 1
+    assert feature_row["metadata"] == {"step": 1}
 
 
 def test_write_controller_sft_assets_smoke(tmp_path: Path) -> None:

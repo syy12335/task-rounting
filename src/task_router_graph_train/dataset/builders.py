@@ -44,6 +44,21 @@ DEFAULT_SFT_TEACHER_SOURCE_DIR = ASSETS_ROOT / "sft_v1" / "teacher_source"
 DEFAULT_SFT_OUTPUT_ROOT = ASSETS_ROOT / "sft_v1"
 RAW_SAMPLE_FILE_TEACHER_TRAIN = "teacher_train.jsonl"
 RAW_SAMPLE_FILE_TEACHER_EVAL = "teacher_eval.jsonl"
+TEACHER_SOURCE_MANIFEST_KEYS = (
+    "dataset",
+    "version",
+    "train_size",
+    "eval_size",
+    "action_space",
+)
+TEACHER_SOURCE_ROW_KEYS = (
+    "sample_id",
+    "step",
+    "terminal",
+    "user_input",
+    "environment",
+    "target_action",
+)
 
 K20_SCENARIO_LEADERBOARDS: dict[str, list[str]] = {
     "s01_status_running_progress": ["reply_core"],
@@ -253,13 +268,8 @@ def build_controller_train_records(
 ) -> tuple[list[TrainingRecord], dict[str, Any]]:
     resolved_dir = (teacher_source_dir or DEFAULT_SFT_TEACHER_SOURCE_DIR).resolve()
     runtime_root = (workspace_root or REPO_ROOT).resolve()
-    manifest_path = resolved_dir / "manifest.json"
-    raw_manifest: dict[str, Any] = {}
-    if manifest_path.exists():
-        loaded_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(loaded_manifest, dict):
-            raise ValueError(f"teacher source manifest must be an object: {manifest_path}")
-        raw_manifest = loaded_manifest
+    raw_manifest = _load_controller_teacher_manifest(resolved_dir)
+    allowed_action_kinds = list(raw_manifest["action_space"])
 
     records: list[TrainingRecord] = []
     counts_by_split = {"train": 0, "eval": 0}
@@ -271,6 +281,13 @@ def build_controller_train_records(
     for split, filename in split_files.items():
         source_path = resolved_dir / filename
         for row in read_jsonl(source_path):
+            if not isinstance(row, dict):
+                raise ValueError(f"teacher source row must be an object: {source_path}")
+            _validate_controller_teacher_row(
+                row=row,
+                sample_source=source_path,
+                allowed_action_kinds=allowed_action_kinds,
+            )
             sample_id = str(row.get("sample_id", "")).strip()
             if not sample_id:
                 raise ValueError(f"sample_id is required: {source_path}")
@@ -303,13 +320,8 @@ def build_controller_train_records(
                     environment_extras=verifier_extras,
                 ),
                 metadata={
-                    "step": int(row.get("step", 0) or 0),
-                    "terminal": bool(row.get("terminal", False)),
-                    "allowed_action_kinds": list(row.get("allowed_action_kinds", [])),
-                    "reward": float(row.get("reward", 0.0) or 0.0),
-                    "source_dataset": str(raw_manifest.get("dataset", "teacher_bootstrap_controller_sft")),
-                    "curriculum_stage": str(row.get("curriculum_stage", "")),
-                    "teacher_note": str(row.get("teacher_note", "")),
+                    "step": int(row["step"]),
+                    "terminal": bool(row["terminal"]),
                 },
             )
             records.append(record)
@@ -324,9 +336,7 @@ def build_controller_train_records(
         "counts_by_split": counts_by_split,
         "roles": [ROLE_CONTROLLER],
         "reward_spec_ids": [CONTROLLER_REWARD_SPEC_ID],
-        "action_space": list(raw_manifest.get("action_space", ["observe", "generate_task"])),
-        "scenarios": list(raw_manifest.get("scenarios", [])),
-        "notes": list(raw_manifest.get("notes", [])),
+        "action_space": list(raw_manifest["action_space"]),
     }
     return records, manifest
 
@@ -423,6 +433,95 @@ def _index_rows_by_sample_id(rows: list[dict[str, Any]], *, source_name: str) ->
             raise ValueError(f"duplicate sample_id in {source_name}: {sample_id}")
         indexed[sample_id] = copy.deepcopy(row)
     return indexed
+
+
+def _load_controller_teacher_manifest(teacher_source_dir: Path) -> dict[str, Any]:
+    manifest_path = teacher_source_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"teacher source manifest is required: {manifest_path}")
+    loaded_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded_manifest, dict):
+        raise ValueError(f"teacher source manifest must be an object: {manifest_path}")
+
+    extra_keys = sorted(set(loaded_manifest) - set(TEACHER_SOURCE_MANIFEST_KEYS))
+    if extra_keys:
+        raise ValueError(f"unexpected teacher source manifest keys: {extra_keys}")
+    missing_keys = [key for key in TEACHER_SOURCE_MANIFEST_KEYS if key not in loaded_manifest]
+    if missing_keys:
+        raise ValueError(f"missing teacher source manifest keys: {missing_keys}")
+
+    dataset = loaded_manifest["dataset"]
+    version = loaded_manifest["version"]
+    train_size = loaded_manifest["train_size"]
+    eval_size = loaded_manifest["eval_size"]
+    action_space = loaded_manifest["action_space"]
+
+    if not isinstance(dataset, str) or not dataset.strip():
+        raise ValueError("teacher source manifest dataset must be a non-empty string")
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError("teacher source manifest version must be a non-empty string")
+    if not isinstance(train_size, int) or isinstance(train_size, bool) or train_size < 0:
+        raise ValueError("teacher source manifest train_size must be a non-negative integer")
+    if not isinstance(eval_size, int) or isinstance(eval_size, bool) or eval_size < 0:
+        raise ValueError("teacher source manifest eval_size must be a non-negative integer")
+    if not isinstance(action_space, list) or not action_space:
+        raise ValueError("teacher source manifest action_space must be a non-empty list")
+
+    normalized_action_space: list[str] = []
+    for value in action_space:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("teacher source manifest action_space entries must be non-empty strings")
+        normalized_action_space.append(value.strip())
+    if len(set(normalized_action_space)) != len(normalized_action_space):
+        raise ValueError("teacher source manifest action_space must not contain duplicates")
+
+    return {
+        "dataset": dataset.strip(),
+        "version": version.strip(),
+        "train_size": train_size,
+        "eval_size": eval_size,
+        "action_space": normalized_action_space,
+    }
+
+
+def _validate_controller_teacher_row(
+    *,
+    row: dict[str, Any],
+    sample_source: Path,
+    allowed_action_kinds: list[str],
+) -> None:
+    extra_keys = sorted(set(row) - set(TEACHER_SOURCE_ROW_KEYS))
+    if extra_keys:
+        raise ValueError(f"unexpected teacher source row keys in {sample_source}: {extra_keys}")
+    missing_keys = [key for key in TEACHER_SOURCE_ROW_KEYS if key not in row]
+    if missing_keys:
+        raise ValueError(f"missing teacher source row keys in {sample_source}: {missing_keys}")
+
+    sample_id = row["sample_id"]
+    if not isinstance(sample_id, str) or not sample_id.strip():
+        raise ValueError(f"sample_id is required: {sample_source}")
+    step = row["step"]
+    if not isinstance(step, int) or isinstance(step, bool) or step <= 0:
+        raise ValueError(f"step must be a positive integer: {sample_id}")
+    terminal = row["terminal"]
+    if not isinstance(terminal, bool):
+        raise ValueError(f"terminal must be a boolean: {sample_id}")
+    user_input = row["user_input"]
+    if not isinstance(user_input, str):
+        raise ValueError(f"user_input must be a string: {sample_id}")
+    environment_payload = row["environment"]
+    if not isinstance(environment_payload, dict):
+        raise ValueError(f"environment must be an object: {sample_id}")
+    target_action = row["target_action"]
+    if not isinstance(target_action, dict):
+        raise ValueError(f"target_action must be an object: {sample_id}")
+    action_kind = target_action.get("action_kind")
+    if not isinstance(action_kind, str) or not action_kind.strip():
+        raise ValueError(f"target_action.action_kind must be a non-empty string: {sample_id}")
+    if action_kind not in allowed_action_kinds:
+        raise ValueError(
+            f"target_action.action_kind must be one of {allowed_action_kinds}: {sample_id}"
+        )
 
 
 def _validate_teacher_manifest(

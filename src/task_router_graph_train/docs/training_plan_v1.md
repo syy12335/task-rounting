@@ -45,7 +45,7 @@ v1 只解决一件事：
 
 1. `SFT warm start`
    - 当前已经进入正式实现链路
-   - 先用小份 `teacher bootstrap` 样本把 controller 拉到可优化区间
+   - 先用小份最小 teacher_source 样本把 controller 拉到可优化区间
    - 重点先解决 JSON schema、动作类别和环境事实引用
 2. `offline RL`
    - 对同一 state 采样多个候选动作
@@ -77,7 +77,23 @@ v1 只解决一件事：
 
 - `assets/sft_v1/teacher_source/`
 
-它是小份 `teacher bootstrap`，目标是先把 `teacher 数据 -> TrainingRecord -> SFT examples -> LoRA train_sft` 的链路做通。
+它是小份最小 teacher_source，目标是先把 `teacher 数据 -> TrainingRecord -> SFT examples -> LoRA train_sft` 的链路做通。
+raw row 只保留当前 controller SFT 需要的字段：
+
+- `sample_id`
+- `step`
+- `terminal`
+- `user_input`
+- `environment`
+- `target_action`
+
+teacher_source manifest 只保留：
+
+- `dataset`
+- `version`
+- `train_size`
+- `eval_size`
+- `action_space`
 
 当前明确不作为默认训练源的是：
 
