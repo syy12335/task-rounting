@@ -37,10 +37,15 @@ from .runtime_adapter import (
 )
 from .train import (
     ControllerSftJsonlDataset,
+    build_grpo_rollout_groups,
     build_sft_token_labels,
+    build_teacher_rankings,
     load_sft_examples,
     tokenize_sft_example,
+    train_controller_grpo,
     train_controller_sft,
+    validate_controller_action,
+    validate_teacher_rankings,
 )
 
 __all__ = [
@@ -58,12 +63,14 @@ __all__ = [
     "ROLE_EXECUTOR_EVAL",
     "ROLE_GRAPH_EVAL",
     "ROLE_REPLY",
+    "build_grpo_rollout_groups",
     "build_controller_state_input",
     "build_controller_sft_examples",
     "build_controller_train_records",
     "build_k20_holdout_records",
     "build_reply_state_input",
     "build_sft_token_labels",
+    "build_teacher_rankings",
     "evaluate_prediction_records",
     "load_eval_sample_triplets",
     "load_sft_examples",
@@ -73,7 +80,10 @@ __all__ = [
     "rewrite_k20_snapshots_with_sidecar",
     "sanitize_environment_payload",
     "tokenize_sft_example",
+    "train_controller_grpo",
     "train_controller_sft",
+    "validate_controller_action",
+    "validate_teacher_rankings",
     "write_controller_sft_assets",
     "write_jsonl",
 ]

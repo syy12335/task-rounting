@@ -2,7 +2,7 @@
 
 `task_router_graph_train` 是 `task_router_graph` 的训练与离线评测模块，不是产品运行模块。
 
-它当前承接的是训练侧骨架加最小 `controller SFT warm start` 闭环：已经有运行时输入适配、样本清洗、最小 teacher_source 数据、SFT examples 构建、LoRA 训练 CLI、reward spec 和离线 evaluator；还没有 `train_rl`、checkpoint 恢复训练和 reply 训练链路。
+它当前承接的是训练侧骨架加 `controller SFT warm start + Teacher-RM GRPO` 的闭环：已经有运行时输入适配、样本清洗、最小 teacher_source 数据、SFT examples 构建、LoRA 训练 CLI、GRPO 训练入口、reward spec 和离线 evaluator；还没有 checkpoint 恢复训练和 reply 训练链路。
 
 ## 当前有什么
 
@@ -17,7 +17,7 @@
 - `reward_specs/`
   - 提供 `controller_v1`、`reply_v1`、`graph_eval_v1`、`executor_guardrail_v1`
 - `train/`
-  - 提供最小 `controller SFT` 训练器、prompt masking 和 LoRA 训练入口
+  - 提供最小 `controller SFT` 训练器、prompt masking、LoRA 训练入口和 `controller GRPO` 训练入口
 - `assets/`
   - 存放样本源、最小 teacher_source、holdout、reward spec 和默认 reports 目录
 - `configs/`
@@ -25,7 +25,7 @@
 
 ## 当前没有什么
 
-- 没有 `train_rl.py`
+- 没有完整多步轨迹 RL 更新器（当前先做单步 controller GRPO）
 - 没有 `reply` 训练样本生成器
 - 没有 optimizer 之外的 RL 更新器、value / critic、checkpoint 恢复训练逻辑
 
@@ -33,6 +33,7 @@
 
 - `k20_manual -> sanitized holdout -> graph_eval evaluator`
 - `teacher_source -> TrainingRecord -> SFT examples -> LoRA train_sft`
+- `controller records -> rollout groups -> teacher ranking -> GRPO examples -> controller update`
 
 当前约定补充：
 
@@ -41,8 +42,8 @@
 
 还没有打通的是：
 
-- `controller offline RL`
 - `reply` 的训练数据与训练闭环
+- controller 多步/整轨迹策略优化
 
 ## docs 导航
 
@@ -106,6 +107,26 @@ PYTHONPATH=src python3 -m task_router_graph_train.cli.evaluate \
 ```
 
 默认输出目录：`src/task_router_graph_train/assets/rl_v1/reports/latest/`
+
+运行 controller Teacher-RM GRPO（单步）：
+
+```bash
+cd /root/WORK/task-rounting
+PYTHONPATH=src python3 -m task_router_graph_train.cli.train_grpo \
+  --output-dir var/runs/task_router_graph_train/grpo/latest \
+  --teacher-mode oracle \
+  --num-candidates 4 \
+  --keep-top-k 2
+```
+
+线上 bad case 回流样本标准化：
+
+```bash
+cd /root/WORK/task-rounting
+PYTHONPATH=src python3 -m task_router_graph_train.cli.ingest_badcases \
+  --input var/runs/production_badcases.jsonl \
+  --output src/task_router_graph_train/assets/rl_v1/badcase_pool/production_sampled.jsonl
+```
 
 SFT 训练依赖单独放在仓库根下的 `requirements-sft.txt`，不会并入基础安装路径。
 

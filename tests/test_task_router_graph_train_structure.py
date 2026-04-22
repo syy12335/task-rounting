@@ -131,3 +131,35 @@ def test_train_module_cli_smoke(tmp_path: Path) -> None:
     )
     assert train_help_proc.returncode == 0, train_help_proc.stderr
     assert "--model-name-or-path" in train_help_proc.stdout
+
+    grpo_help_cmd = [
+        sys.executable,
+        "-m",
+        "task_router_graph_train.cli.train_grpo",
+        "--help",
+    ]
+    grpo_help_proc = subprocess.run(
+        grpo_help_cmd,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert grpo_help_proc.returncode == 0, grpo_help_proc.stderr
+    assert "--teacher-mode" in grpo_help_proc.stdout
+
+    badcase_help_cmd = [
+        sys.executable,
+        "-m",
+        "task_router_graph_train.cli.ingest_badcases",
+        "--help",
+    ]
+    badcase_help_proc = subprocess.run(
+        badcase_help_cmd,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert badcase_help_proc.returncode == 0, badcase_help_proc.stderr
+    assert "--input" in badcase_help_proc.stdout

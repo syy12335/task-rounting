@@ -75,6 +75,11 @@
 - `reply hallucination_rate <= 2%`
 - `graph_deterministic = 100%`
 
+## 当前发布策略
+
+- teacher-rank 训练轮次以 teacher 指标作为主优化信号。
+- 固定 holdout 指标保留为非阻断监控（趋势回归与退化告警），用于失败回流与下一轮训练选择。
+
 ## 命令
 
 构建：
