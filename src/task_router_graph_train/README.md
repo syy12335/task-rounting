@@ -34,6 +34,11 @@
 - `k20_manual -> sanitized holdout -> graph_eval evaluator`
 - `teacher_source -> TrainingRecord -> SFT examples -> LoRA train_sft`
 
+当前约定补充：
+
+- `build_sft_assets` 输出的 `records/*.jsonl` 与 `manifest.json` 不再携带 `reward_spec_id/reward_spec_ids`
+- `reward spec` 只保留在 RL/Eval 路径中使用
+
 还没有打通的是：
 
 - `controller offline RL`

@@ -335,7 +335,6 @@ def build_controller_train_records(
         "record_count": len(records),
         "counts_by_split": counts_by_split,
         "roles": [ROLE_CONTROLLER],
-        "reward_spec_ids": [CONTROLLER_REWARD_SPEC_ID],
         "action_space": list(raw_manifest["action_space"]),
     }
     return records, manifest
@@ -399,6 +398,8 @@ def write_controller_sft_assets(
 
     train_records = [record for record in records if record.split == "train"]
     eval_records = [record for record in records if record.split == "eval"]
+    train_record_rows = [_to_sft_record_row(record) for record in train_records]
+    eval_record_rows = [_to_sft_record_row(record) for record in eval_records]
     examples = build_controller_sft_examples(records)
     train_examples = [row for row in examples if row.split == "train"]
     eval_examples = [row for row in examples if row.split == "eval"]
@@ -409,8 +410,8 @@ def write_controller_sft_assets(
     example_eval_path = examples_dir / "controller_sft_eval.jsonl"
     manifest_path = output_root / "manifest.json"
 
-    write_jsonl(record_train_path, train_records)
-    write_jsonl(record_eval_path, eval_records)
+    write_jsonl(record_train_path, train_record_rows)
+    write_jsonl(record_eval_path, eval_record_rows)
     write_jsonl(example_train_path, train_examples)
     write_jsonl(example_eval_path, eval_examples)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -421,6 +422,13 @@ def write_controller_sft_assets(
         "example_eval_path": example_eval_path,
         "manifest_path": manifest_path,
     }
+
+
+def _to_sft_record_row(record: TrainingRecord) -> dict[str, Any]:
+    # SFT 产物只保留 warm start 所需字段，reward_spec 留在 RL/Eval 链路中。
+    row = record.to_dict()
+    row.pop("reward_spec_id", None)
+    return row
 
 
 def _index_rows_by_sample_id(rows: list[dict[str, Any]], *, source_name: str) -> dict[str, dict[str, Any]]:

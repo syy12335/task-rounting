@@ -7,7 +7,7 @@
 - `teacher_source/`
   - 手工编写的小份 teacher_source 样本，只保留当前 controller SFT 需要的最小字段
 - `records/`
-  - `build_sft_assets` 生成的标准 `TrainingRecord`
+  - `build_sft_assets` 生成的 SFT 记录视图（已去掉 `reward_spec_id`）
 - `examples/`
   - `build_sft_assets` 生成的 SFT `prompt -> target_text` 样本
 

@@ -42,6 +42,7 @@ def test_build_controller_train_records_from_teacher_source() -> None:
     assert manifest["counts_by_split"] == {"train": 12, "eval": 4}
     assert {record.role for record in records} == {"controller"}
     assert {record.reward_spec_id for record in records} == {"controller_v1"}
+    assert "reward_spec_ids" not in manifest
 
     sample = next(record for record in records if record.sample_id == "teacher_train_009_retry_failed_task_step1")
     assert set(sample.state_input) == {"USER_INPUT", "ENVIRONMENT_JSON", "SKILLS_INDEX"}
@@ -188,7 +189,14 @@ def test_write_controller_sft_assets_smoke(tmp_path: Path) -> None:
     )
 
     assert output_paths["manifest_path"].exists()
-    assert len(read_jsonl(output_paths["record_train_path"])) == 12
-    assert len(read_jsonl(output_paths["record_eval_path"])) == 4
+    train_rows = read_jsonl(output_paths["record_train_path"])
+    eval_rows = read_jsonl(output_paths["record_eval_path"])
+    assert len(train_rows) == 12
+    assert len(eval_rows) == 4
+    assert all("reward_spec_id" not in row for row in train_rows)
+    assert all("reward_spec_id" not in row for row in eval_rows)
     assert len(read_jsonl(output_paths["example_train_path"])) == 12
     assert len(read_jsonl(output_paths["example_eval_path"])) == 4
+
+    written_manifest = json.loads(output_paths["manifest_path"].read_text(encoding="utf-8"))
+    assert "reward_spec_ids" not in written_manifest
