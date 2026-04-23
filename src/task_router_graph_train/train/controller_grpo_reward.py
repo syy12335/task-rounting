@@ -33,7 +33,7 @@ class ControllerGroupRewardManager(RewardManagerBase):
         if not runtime_config_path:
             raise ValueError("TASK_ROUTER_GRPO_RUNTIME_CONFIG_PATH is required for ControllerGroupRewardManager")
         self.runtime_config = load_runtime_config(runtime_config_path)
-        self.teacher_config = resolve_teacher_config(self.runtime_config)
+        self.teacher_config = resolve_teacher_config(self.runtime_config, role="reward_judge")
         self.num_candidates = int(self.runtime_config.get("rollout", {}).get("num_candidates", 0))
         if self.num_candidates < 2:
             raise ValueError("rollout.num_candidates must be >= 2 for GRPO reward manager")

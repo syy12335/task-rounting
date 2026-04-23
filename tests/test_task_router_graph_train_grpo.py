@@ -208,6 +208,9 @@ def test_default_online_config_values() -> None:
     config = controller_grpo_module._load_training_config(DEFAULT_GRPO_CONFIG_PATH)
     assert config["rollout"]["backend"] == "sglang"
     assert config["teacher"]["mode"] == "online"
+    assert config["teacher"]["reward_judge"]["mode"] == "online"
+    assert config["teacher"]["reference_generator"]["rubric_id"] == "controller_reference_generator_v1"
+    assert config["teacher"]["regression_judge"]["rubric_id"] == "controller_regression_judge_v1"
     assert config["update"]["backend"] == "verl"
     assert config["update"]["adv_estimator"] == "grpo"
     assert config["debug"]["allow_gold_mutate"] is False
@@ -310,4 +313,3 @@ def test_train_controller_grpo_rejects_oracle_teacher_on_default_path(
 def test_build_teacher_rankings_oracle_helper_still_available_for_debug() -> None:
     ranking_rows = build_teacher_rankings(groups=[], mode="oracle")
     assert ranking_rows == []
-

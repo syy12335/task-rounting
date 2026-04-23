@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 ALLOWED_ACTION_KINDS = {"observe", "generate_task"}
 DEFAULT_TEACHER_DATA_SOURCE = "task_router_graph_train/controller_grpo_online"
+DEFAULT_TEACHER_ROLE = "reward_judge"
 
 _RUBRICS: dict[str, dict[str, Any]] = {
     "controller_grpo_pairwise_v1": {
@@ -21,7 +22,25 @@ _RUBRICS: dict[str, dict[str, Any]] = {
             "优先选择最能推进当前 controller 决策的动作。",
             "避免重复 observe、重复建任务或忽略环境中已有 running/failed 事实。",
         ],
-    }
+    },
+    "controller_reference_generator_v1": {
+        "title": "Controller hard-gold reference generation",
+        "criteria": [
+            "输出一条最合理的 controller 下一步动作，作为 auto-SFT/controller regression 的候选 reference_action。",
+            "必须严格基于当前 formal state 和 bad case 描述，不允许使用外部事实。",
+            "如果 bad case 显示模型重复 observe 或忽略环境事实，reference_action 应显式修正该错误。",
+            "动作必须满足当前 controller action schema。",
+        ],
+    },
+    "controller_regression_judge_v1": {
+        "title": "Controller semantic equivalence judge",
+        "criteria": [
+            "判断 predicted_action 是否和 reference_action 在当前 state 下语义等价。",
+            "重点比较动作类型、工具或任务类型、以及动作目标是否一致。",
+            "不要因为措辞不同就判定 generate_task.task_content 不等价。",
+            "返回布尔语义结论和 0~1 score，score 只反映语义接近度。",
+        ],
+    },
 }
 
 
@@ -42,11 +61,28 @@ def load_runtime_config(runtime_config_path: str | Path) -> dict[str, Any]:
     return payload
 
 
-def resolve_teacher_config(config: dict[str, Any]) -> dict[str, Any]:
-    teacher = dict(config.get("teacher", {}))
+def resolve_teacher_config(config: dict[str, Any], role: str = DEFAULT_TEACHER_ROLE) -> dict[str, Any]:
+    teacher_root = config.get("teacher", {})
+    if not isinstance(teacher_root, dict):
+        raise ValueError("teacher config must be a mapping")
+
+    shared_defaults = {key: value for key, value in teacher_root.items() if not isinstance(value, dict)}
+    role_payload = teacher_root.get(role)
+    teacher = dict(shared_defaults)
+    if isinstance(role_payload, dict):
+        teacher.update(role_payload)
+    elif role != DEFAULT_TEACHER_ROLE and role_payload is not None:
+        raise ValueError(f"teacher.{role} must be a mapping")
+
     mode = str(teacher.get("mode", "online")).strip().lower() or "online"
     teacher["mode"] = mode
-    teacher["rubric_id"] = str(teacher.get("rubric_id", "controller_grpo_pairwise_v1")).strip()
+    teacher["role"] = role
+    default_rubric = {
+        "reward_judge": "controller_grpo_pairwise_v1",
+        "reference_generator": "controller_reference_generator_v1",
+        "regression_judge": "controller_regression_judge_v1",
+    }.get(role, "controller_grpo_pairwise_v1")
+    teacher["rubric_id"] = str(teacher.get("rubric_id", default_rubric)).strip()
     teacher["timeout_sec"] = float(teacher.get("timeout_sec", 60))
     teacher["max_tokens"] = int(teacher.get("max_tokens", 2048))
     teacher["temperature"] = float(teacher.get("temperature", 0.0))
@@ -59,9 +95,9 @@ def resolve_teacher_config(config: dict[str, Any]) -> dict[str, Any]:
 
     if mode == "online":
         if not teacher["base_url"]:
-            raise ValueError("teacher.base_url is required when teacher.mode=online")
+            raise ValueError(f"teacher.{role}.base_url is required when mode=online")
         if not teacher["model"]:
-            raise ValueError("teacher.model is required when teacher.mode=online")
+            raise ValueError(f"teacher.{role}.model is required when mode=online")
         teacher["api_key"] = _resolve_api_key(
             base_url=teacher["base_url"],
             api_key_env=teacher["api_key_env"],
@@ -69,10 +105,16 @@ def resolve_teacher_config(config: dict[str, Any]) -> dict[str, Any]:
         )
     elif mode == "file":
         if not teacher["ranking_path"]:
-            raise ValueError("teacher.ranking_path is required when teacher.mode=file")
+            raise ValueError(f"teacher.{role}.ranking_path is required when mode=file")
     elif mode != "oracle":
         raise ValueError(f"unsupported teacher mode: {mode}")
     return teacher
+
+
+def sanitize_teacher_config_for_report(teacher_config: dict[str, Any]) -> dict[str, Any]:
+    sanitized = copy.deepcopy(teacher_config)
+    sanitized.pop("api_key", None)
+    return sanitized
 
 
 def parse_candidate_action(raw_text: str) -> tuple[dict[str, Any] | None, list[str]]:
@@ -271,13 +313,158 @@ def judge_controller_group(
         timeout_sec=float(teacher_config["timeout_sec"]),
         temperature=float(teacher_config.get("temperature", 0.0)),
         max_tokens=int(teacher_config.get("max_tokens", 2048)),
-        system_prompt=_build_teacher_system_prompt(rubric),
+        system_prompt=_build_group_teacher_system_prompt(rubric),
         user_payload=payload,
     )
     return normalize_teacher_result(group_id=group_id, raw_result=raw_result, candidate_ids=candidate_ids)
 
 
-def _build_teacher_system_prompt(rubric: dict[str, Any]) -> str:
+def generate_reference_action(
+    *,
+    sample_id: str,
+    bucket_key: str,
+    user_input: str,
+    environment_payload: dict[str, Any],
+    state_input: dict[str, Any],
+    badcase_row: dict[str, Any],
+    teacher_config: dict[str, Any],
+) -> dict[str, Any]:
+    mode = str(teacher_config.get("mode", "online")).strip().lower() or "online"
+    if mode != "online":
+        raise ValueError("reference_generator currently only supports teacher.mode=online")
+
+    rubric = get_teacher_rubric(str(teacher_config.get("rubric_id", "")))
+    payload = {
+        "task": "为 controller bad case 生成一条 reference_action。",
+        "sample_id": sample_id,
+        "bucket_key": bucket_key,
+        "user_input": user_input,
+        "environment_formal": copy.deepcopy(environment_payload),
+        "state_input": copy.deepcopy(state_input),
+        "badcase": copy.deepcopy(badcase_row),
+        "rubric": rubric,
+        "output_schema": {
+            "reference_action": {
+                "action_kind": "observe",
+                "reason": "string",
+                "tool": "read",
+                "args": {"target": "latest_round"},
+                "task_type": None,
+                "task_content": None,
+            },
+            "confidence": "0~1",
+            "reason": "string",
+        },
+    }
+    raw_result = _chat_json(
+        base_url=str(teacher_config["base_url"]),
+        api_key=str(teacher_config["api_key"]),
+        model=str(teacher_config["model"]),
+        timeout_sec=float(teacher_config["timeout_sec"]),
+        temperature=float(teacher_config.get("temperature", 0.0)),
+        max_tokens=int(teacher_config.get("max_tokens", 2048)),
+        system_prompt=_build_reference_generator_system_prompt(rubric),
+        user_payload=payload,
+    )
+    return _normalize_reference_generation_result(
+        sample_id=sample_id,
+        bucket_key=bucket_key,
+        raw_result=raw_result,
+    )
+
+
+def judge_action_semantic_equivalence(
+    *,
+    sample_id: str,
+    bucket_key: str,
+    state_input: dict[str, Any],
+    reference_action: dict[str, Any],
+    predicted_action: dict[str, Any],
+    teacher_config: dict[str, Any],
+) -> dict[str, Any]:
+    mode = str(teacher_config.get("mode", "online")).strip().lower() or "online"
+    if mode != "online":
+        raise ValueError("regression_judge currently only supports teacher.mode=online")
+
+    rubric = get_teacher_rubric(str(teacher_config.get("rubric_id", "")))
+    payload = {
+        "task": "判断 predicted_action 是否与 reference_action 在当前 controller state 下语义等价。",
+        "sample_id": sample_id,
+        "bucket_key": bucket_key,
+        "state_input": copy.deepcopy(state_input),
+        "reference_action": copy.deepcopy(reference_action),
+        "predicted_action": copy.deepcopy(predicted_action),
+        "rubric": rubric,
+        "output_schema": {
+            "semantic_equivalent": True,
+            "score": 1.0,
+            "reason": "string",
+        },
+    }
+    raw_result = _chat_json(
+        base_url=str(teacher_config["base_url"]),
+        api_key=str(teacher_config["api_key"]),
+        model=str(teacher_config["model"]),
+        timeout_sec=float(teacher_config["timeout_sec"]),
+        temperature=float(teacher_config.get("temperature", 0.0)),
+        max_tokens=int(teacher_config.get("max_tokens", 2048)),
+        system_prompt=_build_regression_judge_system_prompt(rubric),
+        user_payload=payload,
+    )
+    return _normalize_regression_judge_result(
+        sample_id=sample_id,
+        bucket_key=bucket_key,
+        raw_result=raw_result,
+    )
+
+
+def _normalize_reference_generation_result(
+    *,
+    sample_id: str,
+    bucket_key: str,
+    raw_result: dict[str, Any],
+) -> dict[str, Any]:
+    action = raw_result.get("reference_action")
+    if not isinstance(action, dict):
+        raise ValueError(f"reference_generator must return reference_action object for {sample_id}")
+    valid, errors = validate_action_dict(action)
+    return {
+        "sample_id": sample_id,
+        "bucket_key": bucket_key,
+        "reference_action": copy.deepcopy(action),
+        "reference_action_text": json.dumps(action, ensure_ascii=False, indent=2),
+        "confidence": float(raw_result.get("confidence", 1.0)),
+        "reason": str(raw_result.get("reason", "")).strip(),
+        "schema_valid": valid,
+        "validation_errors": errors,
+        "raw_result": copy.deepcopy(raw_result),
+    }
+
+
+def _normalize_regression_judge_result(
+    *,
+    sample_id: str,
+    bucket_key: str,
+    raw_result: dict[str, Any],
+) -> dict[str, Any]:
+    semantic_equivalent = raw_result.get("semantic_equivalent")
+    if not isinstance(semantic_equivalent, bool):
+        raise ValueError(f"regression_judge must return semantic_equivalent boolean for {sample_id}")
+    try:
+        score = float(raw_result.get("score", 1.0 if semantic_equivalent else 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"regression_judge score must be numeric for {sample_id}") from exc
+    return {
+        "sample_id": sample_id,
+        "bucket_key": bucket_key,
+        "semantic_equivalent": semantic_equivalent,
+        "score": score,
+        "reason": str(raw_result.get("reason", "")).strip(),
+        "raw_result": copy.deepcopy(raw_result),
+    }
+
+
+def _build_group_teacher_system_prompt(rubric: dict[str, Any]) -> str:
     title = str(rubric.get("title", "Controller next-action ranking")).strip()
     criteria = rubric.get("criteria", [])
     lines = [
@@ -295,6 +482,53 @@ def _build_teacher_system_prompt(rubric: dict[str, Any]) -> str:
         [
             "",
             "返回时至少给出完整 ranking 或完整 scores_by_candidate；两者给其一即可。",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _build_reference_generator_system_prompt(rubric: dict[str, Any]) -> str:
+    title = str(rubric.get("title", "Controller hard-gold reference generation")).strip()
+    criteria = rubric.get("criteria", [])
+    lines = [
+        "你是 controller bad case 回流链路里的 reference generator。",
+        "你需要输出一条最合理的 reference_action，作为 hard-gold 候选。",
+        "必须严格输出一个 JSON object，不要输出 markdown，不要输出额外解释。",
+        "",
+        f"Rubric: {title}",
+    ]
+    for item in criteria if isinstance(criteria, list) else []:
+        text = str(item).strip()
+        if text:
+            lines.append(f"- {text}")
+    lines.extend(
+        [
+            "",
+            "输出字段必须包含 reference_action、confidence、reason。",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _build_regression_judge_system_prompt(rubric: dict[str, Any]) -> str:
+    title = str(rubric.get("title", "Controller semantic equivalence judge")).strip()
+    criteria = rubric.get("criteria", [])
+    lines = [
+        "你是 controller regression 的独立语义裁判。",
+        "你要判断 predicted_action 是否和 reference_action 在当前 state 下语义等价。",
+        "不要被 task_content 的不同措辞误导，重点看动作语义。",
+        "必须严格输出一个 JSON object，不要输出 markdown，不要输出额外解释。",
+        "",
+        f"Rubric: {title}",
+    ]
+    for item in criteria if isinstance(criteria, list) else []:
+        text = str(item).strip()
+        if text:
+            lines.append(f"- {text}")
+    lines.extend(
+        [
+            "",
+            "输出字段必须包含 semantic_equivalent、score、reason。",
         ]
     )
     return "\n".join(lines).strip()

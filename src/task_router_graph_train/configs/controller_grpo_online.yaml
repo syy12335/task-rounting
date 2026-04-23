@@ -4,12 +4,32 @@ teacher:
   model: qwen-flash
   api_key_env: API_KEY_Qwen
   timeout_sec: 60
-  rubric_id: controller_grpo_pairwise_v1
   max_batch_size: 4
   max_tokens: 2048
   temperature: 0.0
   allow_missing_api_key: false
   ranking_path: ""
+
+  reward_judge: &reward_judge
+    mode: online
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model: qwen-flash
+    api_key_env: API_KEY_Qwen
+    timeout_sec: 60
+    rubric_id: controller_grpo_pairwise_v1
+    max_batch_size: 4
+    max_tokens: 2048
+    temperature: 0.0
+    allow_missing_api_key: false
+    ranking_path: ""
+
+  reference_generator:
+    <<: *reward_judge
+    rubric_id: controller_reference_generator_v1
+
+  regression_judge:
+    <<: *reward_judge
+    rubric_id: controller_regression_judge_v1
 
 rollout:
   backend: sglang
@@ -63,6 +83,12 @@ data:
   reward_fn_key: data_source
   return_raw_chat: true
   filter_overlong_prompts: false
+
+feedback:
+  auto_sft_confidence_threshold: 0.85
+  regression_reserve_ratio: 0.2
+  regression_reserve_min: 1
+  eval_ratio: 0.2
 
 debug:
   allow_gold_mutate: false
