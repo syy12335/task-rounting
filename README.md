@@ -199,8 +199,6 @@ python scripts/run/run_case.py --config configs/graph.yaml --case /path/to/case.
 # 批量运行（目录内需要是 case json 文件）
 python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to/cases_dir
 
-# 可视化界面
-streamlit run scripts/run/streamlit_app.py
 ```
 
 运行输出默认落到：`var/runs/run_YYYYMMDD_HHMMSS/environment.json`
@@ -237,7 +235,7 @@ data/
   eval_samples/k20_manual/     # 评测样本（20 条，手工标注）
   archive_legacy/              # 历史数据归档
 docs/                          # 设计文档
-scripts/run/                   # CLI / case / streamlit 入口
+scripts/run/                   # CLI / case 入口
 scripts/sglang/                # SGLang 启停脚本
 src/task_router_graph/
   agents/                      # controller / executor / diagnosis / reply / async workflow / memory
