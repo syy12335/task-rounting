@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..dataset import sanitize_environment_payload
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest production bad-case traces into a standardized feedback pool.")
@@ -41,8 +43,15 @@ def main() -> None:
                 "sample_id": sample_id or f"badcase_{len(rows)+1:06d}",
                 "source": str(args.source),
                 "user_input": user_input,
+                "environment_raw": environment,
+                "environment_formal": sanitize_environment_payload(environment)[0],
                 "environment": environment,
+                "policy_output_text": str(payload.get("policy_output_text", payload.get("prediction", payload.get("response", "")))),
+                "policy_output_action": payload.get("policy_output_action", {}),
+                "error_code": str(payload.get("error_code", "")).strip(),
                 "error_tags": [str(item).strip() for item in tags if str(item).strip()],
+                "trace_id": str(payload.get("trace_id", payload.get("run_id", ""))).strip(),
+                "metadata": payload.get("metadata", {}) if isinstance(payload.get("metadata", {}), dict) else {},
             }
         )
 
