@@ -1,154 +1,172 @@
 # task_router_graph_train
 
-`task_router_graph_train` 是 `task_router_graph` 的训练与离线评测模块，不是产品运行模块。
+`task_router_graph_train` 聚焦训练、回流和离线评测；产品运行逻辑保留在 `task_router_graph` 运行时模块中。
 
-它当前承接的是训练侧骨架加 `controller SFT warm start + Teacher-RM GRPO(verl)` 的闭环：已经有运行时输入适配、样本清洗、最小 teacher_source 数据、SFT examples 构建、LoRA 训练 CLI、GRPO 训练入口、reward spec 和离线 evaluator；还没有 checkpoint 恢复训练和 reply 训练链路。
+最近这轮实现已经把口径收口到一条可执行闭环：
 
-## 当前有什么
+- `teacher_source -> TrainingRecord -> SFT examples -> train_sft`
+- `badcase_pool -> build_feedback_assets -> feedback_manifest`
+- `feedback_manifest -> train_grpo / evaluate_controller_regression`
+- `failed evidence -> harvest_failed_badcases -> next round badcase_pool`
+
+当前主线已经收口到“controller-only 的安全训练输入 + badcase 回流 + 单步 GRPO + regression 验证”。
+
+## 当前能力
 
 - `runtime_adapter.py`
-  - 负责把正式 runtime `Environment` 适配成训练态输入
-  - 提供 `build_controller_state_input(...)`
-  - 提供 `build_reply_state_input(...)`
+  - 把运行时 `Environment` 适配成训练态输入
+  - 提供 `build_controller_state_input(...)` 与 `build_reply_state_input(...)`
 - `dataset/`
-  - 负责 `environment` 清洗、`verifier_sidecar` 剥离、holdout 构建和 controller SFT 数据构建
-- `eval/`
-  - 负责离线评测与指标汇总
-- `reward_specs/`
-  - 提供 `controller_v1`、`reply_v1`、`graph_eval_v1`、`executor_guardrail_v1`
+  - 清洗 `environment`
+  - 构造 `TrainingRecord`、`SftExample`
+  - 构建 holdout 与最小 SFT 资产
+- `feedback.py`
+  - 标准化 badcase pool
+  - 生成 run-scoped feedback assets
+  - 输出 `feedback_manifest.json`
+  - 回收 regression 失败样本进入下一轮 badcase pool
 - `train/`
-  - 提供最小 `controller SFT` 训练器、prompt masking、LoRA 训练入口和 `controller GRPO(verl backend)` 训练入口
-- `assets/`
-  - 存放样本源、最小 teacher_source、holdout、reward spec 和默认 reports 目录
-- `configs/`
-  - 存放课程顺序、配比和门禁阈值
+  - 提供 `train_controller_sft(...)`
+  - 提供 `train_controller_grpo(...)`
+  - 当前 GRPO 是 single-step controller，update backend 为 `verl`
+- `eval/`
+  - 提供 holdout evaluator
+  - 提供 `evaluate_controller_regression(...)`
+- `artifacts.py`
+  - 统一 feedback manifest / asset 解析
+  - 收口 repo-relative 的安全路径输出
 
-## 当前没有什么
+## 当前关键约定
 
-- 没有完整多步轨迹 RL 更新器（当前先做单步 controller GRPO on verl）
-- 没有 `reply` 训练样本生成器
-- 没有 optimizer 之外的 RL 更新器、value / critic、checkpoint 恢复训练逻辑
+- 默认安全输入优先使用 `--asset-manifest` 或 `--run-dir`
+- 直接传 `--train-examples`、`--eval-examples`、`--train-records`、`--eval-records` 属于 unsafe override，必须显式加 `--allow-unsafe-path-input`
+- `feedback_manifest.json` 是 badcase 回流产物的统一入口，不鼓励手动拼 jsonl 路径
+- 训练和评测报告中的路径默认会脱敏成 repo-relative 形式，不再输出仓库绝对路径
+- 三路 teacher 职责分离：
+  - `reward_judge`：给 GRPO rollout candidates 打 scalar reward
+  - `reference_generator`：给 badcase 生成 `reference_action`
+  - `regression_judge`：独立判断 `prediction` 与 `reference_action` 是否语义等价
 
-当前真正打通的是：
+## 当前产物类型
 
-- `k20_manual -> sanitized holdout -> graph_eval evaluator`
-- `teacher_source -> TrainingRecord -> SFT examples -> LoRA train_sft`
-- `controller records -> rollout groups -> teacher ranking -> verl preference rows -> controller update`
+- `sft_examples_v1`
+  - `train_controller_sft(...)` 默认消费的训练样本
+- `controller_training_records_v1`
+  - `train_controller_grpo(...)` 默认消费的 controller records
+- `controller_regression_records_v1`
+  - `evaluate_controller_regression(...)` 默认消费的回流评测样本
+- `verl_rl_dataset_v1`
+  - 预渲染的 verl RL dataset；`train_controller_grpo(...)` 也可从 manifest 中直接消费
+- `feedback_run_v1`
+  - 一次 badcase 回流构建的总 manifest
 
-当前约定补充：
+## 现在怎么跑
 
-- `build_sft_assets` 输出的 `records/*.jsonl` 与 `manifest.json` 不再携带 `reward_spec_id/reward_spec_ids`
-- `reward spec` 只保留在 RL/Eval 路径中使用
-
-还没有打通的是：
-
-- `reply` 的训练数据与训练闭环
-- controller 多步/整轨迹策略优化
-
-## docs 导航
-
-训练模块的正式文档都在 `src/task_router_graph_train/docs/`。
-
-- `overview.md`
-  - 模块定位、边界、目录结构和当前命令入口
-- `data_contract.md`
-  - 训练 record 契约、formal environment 约束和输入形状
-- `eval_spec.md`
-  - 四榜评测口径、反作弊门禁和通过阈值
-- `training_plan_v1.md`
-  - RL v1 的正式训练路线、v1 范围和学习/实现分层
-
-建议阅读顺序：`overview.md -> data_contract.md -> eval_spec.md -> training_plan_v1.md`。
-
-## 学习材料
-
-面向个人学习和逐步实验的 notebook 不放在正式 docs 中，而是放在仓库根下的 `.private/task_router_graph_train/`。
-
-- `.private/task_router_graph_train/README.md`
-  - notebook 学习顺序和启动方式
-- `.private/task_router_graph_train/notebooks/`
-  - `01` 到 `07` 的 RL v1 + SFT 学习路径
-- `.private/task_router_graph_train/notes/`
-  - 个人笔记、踩坑记录和实验观察
-
-## 当前怎么跑
-
-构建模块内资产：
+构建 holdout 与基础资产：
 
 ```bash
 cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.build_assets
+PYTHONPATH=src python -m task_router_graph_train.cli.build_assets
 ```
 
-构建 controller SFT teacher records 和 examples：
+从最小 `teacher_source` 生成 controller SFT 记录与 examples：
 
 ```bash
 cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.build_sft_assets
+PYTHONPATH=src python -m task_router_graph_train.cli.build_sft_assets
 ```
 
-运行最小 controller SFT warm start：
+安全方式运行 controller SFT：
 
 ```bash
 cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.train_sft \
+PYTHONPATH=src python -m task_router_graph_train.cli.train_sft \
+  --model-name-or-path <your-model> \
+  --lora-target-modules q_proj v_proj \
+  --asset-manifest var/runs/task_router_graph_train/feedback/<run-id>/feedback_manifest.json
+```
+
+把标准化 badcase pool 构造成 run-scoped feedback assets：
+
+```bash
+cd <repo-root>
+PYTHONPATH=src python -m task_router_graph_train.cli.build_feedback_assets \
+  --badcase-pool var/runs/task_router_graph_train/badcases/normalized.jsonl \
+  --output-root var/runs/task_router_graph_train/feedback
+```
+
+安全方式运行 controller GRPO：
+
+```bash
+cd <repo-root>
+PYTHONPATH=src python -m task_router_graph_train.cli.train_grpo \
+  --config src/task_router_graph_train/configs/controller_grpo_online.yaml \
+  --output-dir var/runs/task_router_graph_train/grpo/latest \
+  --asset-manifest var/runs/task_router_graph_train/feedback/<run-id>/feedback_manifest.json \
   --model-name-or-path <your-model> \
   --lora-target-modules q_proj v_proj
 ```
 
-默认 SFT 训练输出目录：`var/runs/task_router_graph_train/sft/latest/`
-
-跑离线评测：
+如果只想导出 RL dataset、verl request 和审计产物，不执行 update：
 
 ```bash
 cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.evaluate \
+PYTHONPATH=src python -m task_router_graph_train.cli.train_grpo \
+  --config src/task_router_graph_train/configs/controller_grpo_online.yaml \
+  --output-dir var/runs/task_router_graph_train/grpo/export_only \
+  --asset-manifest var/runs/task_router_graph_train/feedback/<run-id>/feedback_manifest.json \
+  --model-name-or-path <your-model> \
+  --export-only
+```
+
+对 badcase 回流样本做 controller regression：
+
+```bash
+cd <repo-root>
+PYTHONPATH=src python -m task_router_graph_train.cli.evaluate_controller_regression \
+  --predictions var/runs/task_router_graph_train/predictions/controller.jsonl \
+  --asset-manifest var/runs/task_router_graph_train/feedback/<run-id>/feedback_manifest.json
+```
+
+把 regression 失败样本收回下一轮 badcase pool：
+
+```bash
+cd <repo-root>
+PYTHONPATH=src python -m task_router_graph_train.cli.harvest_failed_badcases \
+  --evidence var/runs/task_router_graph_train/controller_regression/latest/evidence_rows.jsonl \
+  --output var/runs/task_router_graph_train/badcases/next_round.jsonl
+```
+
+跑固定 holdout 的离线评测：
+
+```bash
+cd <repo-root>
+PYTHONPATH=src python -m task_router_graph_train.cli.evaluate \
   --predictions src/task_router_graph_train/assets/rl_v1/holdout/k20_manual_records.jsonl
 ```
 
-默认输出目录：`src/task_router_graph_train/assets/rl_v1/reports/latest/`
+## Docs 导航
 
-运行 controller Teacher-RM GRPO（单步，verl backend）：
+正式文档在 `src/task_router_graph_train/docs/`：
 
-```bash
-cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.train_grpo \
-  --output-dir var/runs/task_router_graph_train/grpo/latest \
-  --teacher-mode oracle \
-  --num-candidates 4 \
-  --keep-top-k 2 \
-  --run-verl-update \
-  --model-name-or-path <your-model> \
-  --lora-target-modules q_proj v_proj
-```
+- `overview.md`
+  - 模块定位、闭环总览、主要入口和输出约定
+- `data_contract.md`
+  - teacher_source、TrainingRecord、feedback manifest 和 badcase 回流契约
+- `eval_spec.md`
+  - holdout evaluator、controller regression、coverage 面板与失败回流
+- `training_plan_v1.md`
+  - controller-only v1 训练路线与非目标
 
-如果只想先准备 `verl` 训练请求与偏好数据（不执行训练），去掉 `--run-verl-update` 即可。
+学习材料在 `.private/task_router_graph_train/`：
 
-若要执行自定义 `verl` 命令模板（占位符支持 `{python} {request} {output_dir} {train_path} {eval_path} {model}`）：
+- `.private/task_router_graph_train/README.md`
+- `.private/task_router_graph_train/notebooks/`
+- `.private/task_router_graph_train/notes/`
 
-```bash
-PYTHONPATH=src python3 -m task_router_graph_train.cli.train_grpo \
-  --run-verl-update \
-  --execute-verl-command \
-  --verl-command-template "{python} -m verl.trainer.main --config {request}" \
-  --model-name-or-path <your-model> \
-  --lora-target-modules q_proj v_proj
-```
+## 当前还不做什么
 
-线上 bad case 回流样本标准化：
-
-```bash
-cd <repo-root>
-PYTHONPATH=src python3 -m task_router_graph_train.cli.ingest_badcases \
-  --input var/runs/production_badcases.jsonl \
-  --output src/task_router_graph_train/assets/rl_v1/badcase_pool/production_sampled.jsonl
-```
-
-SFT 训练依赖单独放在仓库根下的 `requirements-sft.txt`，不会并入基础安装路径。`train_grpo` 在执行 `--run-verl-update --execute-verl-command` 时需要额外安装 `verl`。
-
-## 当前测试
-
-- `tests/test_task_router_graph_train_dataset.py`
-- `tests/test_task_router_graph_train_evaluator.py`
-- `tests/test_task_router_graph_train_sft.py`
-- `tests/test_task_router_graph_train_structure.py`
+- 不把 `reply` 训练闭环当作当前主线
+- 不把多步 / 全轨迹 GRPO 当作当前已承诺实现
+- 不把 reward model、critic、checkpoint 恢复训练写成当前版本能力
+- 不鼓励直接从散落 jsonl 路径启动训练入口

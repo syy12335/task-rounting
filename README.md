@@ -1,6 +1,6 @@
 # task-router
 
-基于 LangGraph 的工程场景任务路由框架，面向软件测试工作流设计。
+基于 LangGraph 的工程场景任务路由框架，面向通用工程工作流设计；当前 README 里出现的测试任务类型主要是占位示例。
 
 核心设计思路：按任务的确定性高低分层截流。确定性越高的任务越早离开 LLM 路径，只有真正需要灵活处理的任务才进入 token 消耗最高的 agentic loop。在确定性任务（controller一次截留+executor pyskill 二次截留）占主导的场景下，这种分层通常能明显降低整体推理成本，经验消耗约为openclaw 的 7%。
 
@@ -8,7 +8,7 @@
 
 ## 为什么要分层
 
-通用 agentic 框架会倾向于让所有输入都走完整的 agentic loop，但工程场景里很多任务的执行路径其实是固定的，尤其是测试类任务，经常并不需要模型持续动态决策。
+通用 agentic 框架会倾向于让所有输入都走完整的 agentic loop，但工程场景里很多任务的执行路径其实是固定的；README 里用测试类任务举例，只是为了把分层路由讲清楚，并不代表框架只服务测试场景。
 
 task-router 的做法是：把任务按确定性拆成多层执行路径，越确定的任务越早截流。
 
@@ -107,7 +107,7 @@ allowed-tools: ["your_tool"]
 
 ### 5. Agent Memory 压缩
 
-各 agent 会按角色维护上下文视图；当上下文超过 `context_window_tokens`（默认 3000）时触发摘要压缩。工具返回过大时按 `head + mid_hits + tail` 规则裁剪，尽量保留证据密度而不是原样灌入模型。
+各 agent 会按角色维护上下文视图；当上下文超过 `context_window_tokens`（默认 3000）时触发摘要压缩。工具返回过大时按 `head + mid_hits + tail` 规则裁剪，尽量保留证据密度，避免原样整段灌入模型。
 
 ---
 
@@ -223,7 +223,7 @@ streamlit run scripts/run/streamlit_app.py
 - token 节省比例依赖确定性任务分布：Controller一次分流（这里用`functest / accutest / perftest`占位） 占比越高，节省越明显和executor二次分流（skill和pyskill）；如果大多数任务都落到 executor，自然收益会变小
 - pyskill / sync skill 需要人工维护：确定性场景越多，配套脚本也越需要持续演进
 - 评测集规模还小：当前 `data/eval_samples/k20_manual` 是 20 条手工样本，覆盖 E1~E4 四类错误模式，适合机制验证，不代表全量线上分布
-- 场景绑定较强：目前设计主要服务软件测试工作流，迁移到其他业务需要重新定义 task type、skill 和失败治理口径
+- 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是占位示例；迁移到其他工程场景时，需要重新定义 task type、skill 和失败治理口径
 
 ---
 

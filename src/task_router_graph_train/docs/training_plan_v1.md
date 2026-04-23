@@ -1,146 +1,210 @@
-# RL v1 训练方案
+# Task Router Train v1 训练方案
 
 ## 目标
 
-本期目标不是把完整训练引擎一次性做完，而是把 `controller-only` 的后训练路线定义清楚，并和现有 harness / evaluator 边界对齐。
+v1 要解决的是 controller-only 的一条稳闭环：
 
-v1 只解决一件事：
+- 先用最小 teacher_source 做 SFT warm start
+- 再用 badcase 回流构造新资产
+- 再用 `reward_judge` 做 single-step controller GRPO
+- 再用 `regression_judge` 验证 badcase 是否真的被修复
+- 最后把失败样本继续回流
 
-- 让模型稳定读懂正式 `environment/task/round/track` 机制
-- 在 `controller` 角色上输出结构化、可校验、环境事实对齐的下一步动作
+## 为什么是这条路线
 
-## 模块边界
+最近几轮提交已经把工程事实收口成下面几点：
 
-正式训练与评测真源继续放在 `src/task_router_graph_train/`。
+- 训练入口默认要走 manifest，散路径 jsonl 只保留给调试和兼容场景
+- feedback 必须形成 run-scoped manifest，不能靠人工记住哪几个文件拼在一起
+- teacher 已经拆成 `reward_judge / reference_generator / regression_judge`
+- badcase 修复是否生效，要靠独立 regression 判断，不能只看训练过程里的 reward
 
-- `docs/`
-  - 对团队有效的正式设计文档
-- `dataset/`
-  - 正式训练样本与 holdout 的构建逻辑
-- `reward_specs/`
-  - 程序化奖励与评测口径
-- `cli/`
-  - 可重复执行的正式命令入口
-
-个人学习与实验材料不放在正式 docs 中，而是放在仓库根下的 `.private/task_router_graph_train/`。
+因此 v1 的核心是把闭环做对。
 
 ## v1 范围
 
-进入 v1 训练：
+当前进入正式训练主线的只有：
 
 - `controller`
 
-本期不进入训练：
+当前已经纳入正式实现的能力：
 
-- `reply`
-- `graph_deterministic`
-- `executor_guardrail`
-- 在线 RL
-- reward model
-- PPO / 全链路 graph policy 优化
+1. `teacher_source -> TrainingRecord -> SftExample`
+2. `train_controller_sft(...)`
+3. `badcase_pool -> build_feedback_assets(...)`
+4. `train_controller_grpo(...)`
+5. `evaluate_controller_regression(...)`
+6. `harvest_failed_badcases(...)`
 
-## 训练路线
+当前明确不纳入 v1 主线：
 
-当前 v1 固定为两阶段：
+- `reply` 训练
+- multi-step / full-trajectory GRPO
+- reward model / critic
+- PPO 训练栈
+- executor RL
 
-1. `SFT warm start`
-   - 当前已经进入正式实现链路
-   - 先用小份最小 teacher_source 样本把 controller 拉到可优化区间
-   - 重点先解决 JSON schema、动作类别和环境事实引用
-2. `Teacher-RM GRPO`（controller 单步）
-   - 对同一 state 采样多个候选动作
-   - 用强基模 teacher 返回组内排序（ranking）
-   - 用 `verl` 承载组内相对优势更新（先做单步 controller 决策）
+## 分阶段路线
 
-未来可升级路线：
+### Stage 0: 状态与输入收口
 
-3. `multi-step / full-trajectory GRPO`
-   - 在单步 controller GRPO 稳定后再扩展
-   - 重点解决长轨迹归因、回报分配和稳定更新
+目标：
 
-之所以把 `SFT warm start` 放在 `Teacher-RM GRPO` 之前，是因为：
+- 把 raw `environment` 切成 `formal_environment + verifier_sidecar`
+- 固定 controller `state_input` 为 `USER_INPUT / ENVIRONMENT_JSON / SKILLS_INDEX`
 
-- 没有 warm start 时，policy 采样出来的大量候选往往过于低质
-- `GRPO` 这类策略优化更依赖“候选已经进入可比较区间”
-- `SFT` 先稳定 schema、动作类型和基本环境对齐，后续再用 `GRPO` 强化偏好更稳
+关键函数：
 
-本期 episode 语义固定为：
-
-- `1-3 round micro-episode`
-
-本期训练输入固定使用：
-
+- `sanitize_environment_payload(...)`
 - `build_controller_state_input(...)`
+- `render_controller_prompt(...)`
 
-当前 SFT 默认数据源固定为：
+### Stage 1: SFT warm start
 
-- `assets/sft_v1/teacher_source/`
+目标：
 
-它是小份最小 teacher_source，目标是先把 `teacher 数据 -> TrainingRecord -> SFT examples -> LoRA train_sft` 的链路做通。
-raw row 只保留当前 controller SFT 需要的字段：
+- 先让 controller 稳定输出合法动作 JSON
+- 先把 schema、动作种类、基本环境事实对齐做稳
 
-- `sample_id`
-- `terminal`
-- `user_input`
-- `environment`
-- `target_action`
+真源：
 
-teacher_source manifest 只保留：
+- `src/task_router_graph_train/assets/sft_v1/teacher_source/`
 
-- `dataset`
-- `version`
-- `train_size`
-- `eval_size`
-- `action_space`
-
-当前明确不作为默认训练源的是：
-
-- `docs/archive_legacy/2026-04/rl/controller_train.jsonl`
-
-legacy 数据仍然保留为后续扩展参考，但不进入这次最小实现的默认构建路径。
-
-本期默认动作空间固定为：
-
-- `observe`
-- `generate_task`
-
-## 奖励与门禁
-
-controller 训练主奖励改为 teacher 排序信号（ranking reward）。
-程序化 reward spec 保留用于对照分析与回归观测，不再作为主训练优化目标。
-
-阶段评测口径继续以：
-
-- `docs/eval_spec.md`
-- `configs/curriculum_v1.json`
-
-为准。
-
-## 学习与实现分层
-
-学习与引导采用 notebook-first：
-
-- `.private/task_router_graph_train/README.md`
-- `.private/task_router_graph_train/notebooks/`
-- `.private/task_router_graph_train/notes/`
-
-正式实现沉淀顺序固定为：
-
-1. 先在 notebook 中把 `teacher source -> records -> examples -> train_sft` 走通
-2. 再把 teacher 排序、GRPO 单步流程沉淀到 `dataset/`、训练模块和 `cli/`
-3. 最终用现有 evaluator 和 holdout 做非阻断趋势监控
-
-这里的正式表达固定为：
-
-- 当前实现：`SFT + Teacher-RM GRPO on verl (single-step controller)`
-- 未来可升级：`multi-step / full-trajectory GRPO`
-- 当前文档不会把 `PPO` 写成 v1 的既定工程承诺
-
-## 后续正式入口
-
-v1 完整实现后应补齐的正式入口包括：
+关键函数：
 
 - `build_controller_train_records(...)`
+- `build_controller_sft_examples(...)`
 - `train_controller_sft(...)`
+
+默认安全输入：
+
+- `--asset-manifest`
+- `--run-dir`
+
+### Stage 2: badcase feedback assets
+
+目标：
+
+- 把线上/评测失败样本变成可以消费的 run-scoped 资产
+
+关键函数：
+
+- `build_feedback_assets(...)`
+- `admit_reference_action(...)`
+
+关键产物：
+
+- `feedback_manifest.json`
+- `sft_examples_v1`
+- `controller_training_records_v1`
+- `controller_regression_records_v1`
+
+这里要特别区分：
+
+- `reference_action` 只服务 auto-SFT 与 regression
+- `reference_action` 不进入 GRPO 主路径
+
+### Stage 3: controller GRPO
+
+目标：
+
+- 在当前 policy 已经进入可比较区间后
+- 对同一 state 采样多个 candidates
+- 用 `reward_judge` 给 per-response scalar reward
+- 由 `verl` 完成 advantage / normalization / update
+
+关键函数：
+
 - `train_controller_grpo(...)`
-- `evaluate_controller_policy(...)`
+- `score_group_candidates(...)`
+
+当前形态：
+
+- single-step controller
+- online teacher reward
+- `verl` update backend
+
+补充约定：
+
+- `--export-only` 用于只导出 RL dataset 和 request，不执行 update
+- 报告中的路径默认输出 repo-relative 形式
+
+### Stage 4: controller regression
+
+目标：
+
+- 验证 badcase 修复是否真实成立，避免只在训练阶段“看起来更像”
+
+关键函数：
+
+- `evaluate_controller_regression(...)`
+
+关键 teacher：
+
+- `regression_judge`
+
+关键输出：
+
+- `metrics_summary.json`
+- `metrics_by_bucket.json`
+- `run_manifest.json`
+- `evidence_rows.jsonl`
+
+### Stage 5: failed harvest
+
+目标：
+
+- 把 regression 失败样本重新放回 badcase pool
+- 形成下一轮训练闭环
+
+关键函数：
+
+- `harvest_failed_badcases(...)`
+
+## 三路 teacher 分工
+
+### reward_judge
+
+- 输入：同组 rollout candidates
+- 输出：每个 response 的 scalar reward
+- 不做：生成 `reference_action`
+
+### reference_generator
+
+- 输入：badcase + state
+- 输出：`reference_action`
+- 不做：GRPO reward 排名
+
+### regression_judge
+
+- 输入：`state + reference_action + predicted_action`
+- 输出：`semantic_equivalent / score / reason`
+- 不做：训练 gold 构造
+
+## 当前门禁策略
+
+当前门禁分成两层：
+
+- holdout evaluator：做非阻断趋势监控
+- controller regression：做 badcase 修复验证
+
+如果 regression 失败：
+
+- 不把这次修复当作已经完成
+- 失败 evidence 要进入 `harvest_failed_badcases(...)`
+
+## 学习材料与正式实现分层
+
+正式真源在：
+
+- `src/task_router_graph_train/`
+
+教学 notebook 与个人学习材料在：
+
+- `.private/task_router_graph_train/`
+
+当前推荐的理解顺序是：
+
+1. 先用 notebook 看总图和对象流转
+2. 再看 `feedback_manifest`、三路 teacher 和安全输入
+3. 最后回到正式 CLI 和训练入口

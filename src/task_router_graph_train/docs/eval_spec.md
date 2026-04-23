@@ -1,95 +1,156 @@
-# RL v1 评测规范
+# Task Router Train 评测规范
 
-## 评测目标
+## 目标
 
-只评估一件事：
-模型是否真正读懂正式 `environment/task` 机制，而不是记住 evaluator 提示。
+当前评测分成两条线：
 
-## 榜单拆分
+1. 固定 holdout 的离线 evaluator
+2. badcase 回流后的 controller regression
 
-### controller_core
+二者分工明确，分别回答不同问题：
 
-- `invalid_json_rate`
-- `invalid_action_rate`
-- `env_fact_ignored_rate`
-- `repeated_observe_rate`
-- `next_action_accuracy`
-- `previous_failed_track_usage_accuracy`
+- holdout evaluator：看全局趋势有没有退化
+- controller regression：看这轮 badcase 修复到底有没有对准问题
 
-### reply_core
+## 1. holdout evaluator
 
-- `status_semantic_accuracy`
-- `linked_result_resolution_accuracy`
-- `grounded_reply_score`
-- `hallucination_rate`
-- `over_finalization_rate`
+固定样本位于：
 
-### graph_deterministic
+- `src/task_router_graph_train/assets/rl_v1/holdout/`
 
-- `status_shortcut`
-- `collect_workflows`
-- `pre_reply_collect`
-- `run_id` 幂等回填
-- `stale running` failed 收敛
-- `history rollup` 关键 round 保护
+默认命令：
 
-### executor_guardrail
+```bash
+PYTHONPATH=src python -m task_router_graph_train.cli.evaluate --predictions <path>
+```
 
-- `skill activation order`
-- `read loop break`
-- `required_tool_call_rate`
-- `step_exhausted_without_tool_rate`
-
-## 输出产物
-
-每次评测至少输出：
+默认输出：
 
 - `metrics_summary.json`
 - `metrics_by_error_code.json`
 - `run_manifest.json`
 - `evidence_samples.jsonl`
 
-## 统计口径
+当前策略上，holdout 指标用于：
 
-每个数值型指标至少提供：
+- 趋势监控
+- 退化告警
+- 对照观察
 
-- `mean`
-- `p50`
-- `p90`
-- `95% CI`
+它现在是非阻断监控，不直接决定一次 badcase 回流是否成功。
 
-## 反作弊门禁
+## 2. controller regression
 
-同一批样本需要双跑：
+controller regression 吃的是：
 
-1. sidecar 保留但模型不可见
-2. sidecar 完全移除
+- 模型 predictions
+- `controller_regression_records_v1`
 
-若结果差异超过 `2%`，则判定模型依赖 evaluator 侧信息。
-
-## 通过阈值
-
-- `controller next_action_accuracy >= 90%`
-- `controller env_fact_ignored_rate <= 8%`
-- `reply status_semantic_accuracy >= 95%`
-- `reply hallucination_rate <= 2%`
-- `graph_deterministic = 100%`
-
-## 当前发布策略
-
-- teacher-rank 训练轮次以 teacher 指标作为主优化信号。
-- 固定 holdout 指标保留为非阻断监控（趋势回归与退化告警），用于失败回流与下一轮训练选择。
-
-## 命令
-
-构建：
+推荐安全入口：
 
 ```bash
-PYTHONPATH=src python -m task_router_graph_train.cli.build_assets
+PYTHONPATH=src python -m task_router_graph_train.cli.evaluate_controller_regression \
+  --predictions <path> \
+  --asset-manifest <feedback-manifest>
 ```
 
-评测：
+`evaluate_controller_regression(...)` 会：
+
+1. 读取 regression records
+2. 解析 prediction
+3. 调用独立 `regression_judge`
+4. 生成 evidence rows
+5. 汇总 metrics、coverage 和 run manifest
+
+默认输出：
+
+- `metrics_summary.json`
+- `metrics_by_bucket.json`
+- `run_manifest.json`
+- `evidence_rows.jsonl`
+
+## 3. regression 的核心判断
+
+当前 regression 最关心的是：
+
+- prediction 是否存在
+- prediction 是否可解析
+- schema 是否有效
+- `action_kind` 是否匹配
+- prediction 与 `reference_action` 是否语义等价
+
+因此一条 evidence row 会保留：
+
+- `reference_action`
+- `predicted_action`
+- `semantic_equivalent`
+- `semantic_score`
+- `judge_reason`
+- `failure_reason`
+
+## 4. coverage 面板
+
+feedback manifest 会保留回流覆盖率信息，regression 会继续沿用这份 coverage 视图。
+
+当前重点字段包括：
+
+- `raw_badcase_count_by_bucket`
+- `regression_reserved_count_by_bucket`
+- `coverage_ratio_by_bucket`
+- `uncovered_buckets`
+- `uncovered_bucket_count`
+
+这套 coverage 面板回答的是：
+
+- 哪些 badcase bucket 已经进入 regression
+- 哪些 bucket 这一轮还没有被覆盖
+- 哪些 bucket 因 teacher 质量或 admission 规则被丢弃
+
+## 5. 失败回流
+
+controller regression 的失败 evidence 只是闭环中的中间结果。
+
+失败样本会继续通过：
 
 ```bash
-PYTHONPATH=src python -m task_router_graph_train.cli.evaluate --predictions <path>
+PYTHONPATH=src python -m task_router_graph_train.cli.harvest_failed_badcases \
+  --evidence <evidence_rows.jsonl> \
+  --output <next_round_badcases.jsonl>
 ```
+
+回到下一轮 badcase pool。
+
+因此当前闭环是：
+
+- badcase pool
+- feedback assets
+- train / regression
+- failed evidence
+- next round badcase pool
+
+## 6. Teacher 与评测边界
+
+当前三路 teacher 要严格分开：
+
+- `reward_judge`
+  - 只服务 GRPO reward manager
+- `reference_generator`
+  - 只服务 badcase -> reference_action
+- `regression_judge`
+  - 只服务 controller regression
+
+特别强调：
+
+- `reference_action` 不进入 GRPO 主路径
+- `advantage`、normalization、update 在 `verl` 内部
+- regression 结论不能被混写成训练 gold
+
+## 7. 当前发布策略
+
+当前版本的评测策略是：
+
+- holdout evaluator 保留为非阻断监控
+- controller regression 负责验证 badcase 修复是否真实生效
+- 未覆盖或未修复的 bucket 回流到下一轮 badcase pool
+
+这比单纯看一个总分更符合当前迭代方式。
