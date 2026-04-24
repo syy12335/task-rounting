@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -47,6 +48,20 @@ def test_root_directories_do_not_expose_rl_v1_formal_entrypoints() -> None:
     ]
     for path in forbidden_paths:
         assert not path.exists(), path
+
+
+def test_agenticsearch_lab_notebook_bootstraps_repo_root() -> None:
+    notebook_path = (
+        REPO_ROOT
+        / ".private"
+        / "task_router_graph_train"
+        / "agenticsearch_lab"
+        / "01_search_r1_skill_policy_grpo_bridge.ipynb"
+    )
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    source = "".join(notebook["cells"][1]["source"])
+    assert 'Path.cwd().resolve(), *Path.cwd().resolve().parents' in source
+    assert '(candidate / "src" / "task_router_graph_train").exists()' in source
 
 
 def test_train_module_cli_smoke(tmp_path: Path) -> None:
