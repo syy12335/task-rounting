@@ -247,7 +247,7 @@ class Environment:
     def build_controller_context(
         self,
         *,
-        default_task_limit: int = 5,
+        default_round_limit: int = 5,
         compress: bool = False,
         compress_target_tokens: int | None = None,
     ) -> dict[str, Any]:
@@ -256,7 +256,7 @@ class Environment:
 
         view = self.build_context_view(
             # Keep immediate failed retry behavior: only broaden when current last task is failed.
-            task_limit=None if current_failed_context is not None else default_task_limit,
+            round_limit=None if current_failed_context is not None else default_round_limit,
             include_user_input=True,
             include_task=True,
             include_reply=True,
@@ -265,17 +265,24 @@ class Environment:
             compress_target_tokens=compress_target_tokens,
         )
 
-        tasks_payload = view.get("tasks")
-        if isinstance(tasks_payload, list):
-            for item in tasks_payload:
-                if not isinstance(item, dict):
+        rounds_payload = view.get("rounds")
+        if isinstance(rounds_payload, list):
+            for round_item in rounds_payload:
+                if not isinstance(round_item, dict):
                     continue
-                task_payload = item.get("task")
-                if not isinstance(task_payload, dict):
+                tasks_payload = round_item.get("tasks")
+                if not isinstance(tasks_payload, list):
                     continue
-                if str(task_payload.get("status", "")).strip().lower() == "failed":
-                    task_payload["result"] = ""
-                    item["reply"] = ""
+                for task_item in tasks_payload:
+                    if not isinstance(task_item, dict):
+                        continue
+                    task_payload = task_item.get("task")
+                    if not isinstance(task_payload, dict):
+                        continue
+                    if str(task_payload.get("status", "")).strip().lower() == "failed":
+                        task_payload["result"] = ""
+                        if "reply" in task_item:
+                            task_item["reply"] = ""
 
         if previous_failed_context is None:
             return view
@@ -363,7 +370,7 @@ class Environment:
     def build_context_view(
         self,
         *,
-        task_limit: int | None = 5,
+        round_limit: int | None = 5,
         include_user_input: bool = True,
         include_task: bool = True,
         include_reply: bool = True,
@@ -374,18 +381,22 @@ class Environment:
     ) -> dict[str, Any]:
         self._assert_round_consistency()
 
-        # Default read view for AI: cur_round + flattened task items.
-        tasks_payload: list[dict[str, object]] = []
+        # Default read view for AI: cur_round + visible rounds.
+        rounds_payload: list[dict[str, object]] = []
         target_tokens = _safe_target_tokens(compress_target_tokens)
 
         for round_item in self.rounds:
+            round_payload: dict[str, object] = {
+                "round_id": round_item.round_id,
+                "tasks": [],
+            }
+            if include_user_input:
+                round_payload["user_input"] = round_item.user_input
+            tasks_payload: list[dict[str, object]] = []
             for task_item in round_item.tasks:
                 item: dict[str, object] = {
-                    "round_id": round_item.round_id,
                     "task_id": task_item.task_id,
                 }
-                if include_user_input:
-                    item["user_input"] = round_item.user_input
                 if include_trace:
                     track_payload = _clone_track(task_item.track)
                     if compress:
@@ -402,13 +413,15 @@ class Environment:
                         reply_value = _compact_text_value(reply_value, target_tokens=target_tokens)
                     item["reply"] = reply_value
                 tasks_payload.append(item)
+            round_payload["tasks"] = tasks_payload
+            rounds_payload.append(round_payload)
 
-        if task_limit is not None:
-            tasks_payload = tasks_payload[-task_limit:]
+        if round_limit is not None:
+            rounds_payload = rounds_payload[-round_limit:]
 
         return {
             "cur_round": self.cur_round,
-            "tasks": tasks_payload,
+            "rounds": rounds_payload,
             "history_summary_latest": self.get_history_summary_latest(limit=history_summary_limit),
             "history_meta_summary": str(self.history_meta_summary or ""),
         }

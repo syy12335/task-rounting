@@ -54,7 +54,7 @@ _OBSERVE_BUILD_VIEW_SCHEMA: dict[str, Any] = {
         "args": {
             "type": "object",
             "properties": {
-                "task_limit": {"type": ["integer", "null"], "minimum": 1},
+                "round_limit": {"type": ["integer", "null"], "minimum": 1},
                 "include_user_input": {"type": ["boolean", "integer", "string"]},
                 "include_task": {"type": ["boolean", "integer", "string"]},
                 "include_reply": {"type": ["boolean", "integer", "string"]},

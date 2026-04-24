@@ -22,7 +22,7 @@
 
 - `read {"path":"..."}`
 - `ls {"path":"..."}`
-- `build_context_view {"task_limit":3,"include_trace":false,"include_user_input":false,"include_task":true,"include_reply":false}`
+- `build_context_view {"round_limit":3,"include_trace":false,"include_user_input":true,"include_task":true,"include_reply":true}`
 - `previous_failed_track {}`
 - `beijing_time {}`
 - `skill_tool {"name":"...","input":{...}}`

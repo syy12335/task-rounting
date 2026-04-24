@@ -161,7 +161,7 @@ def _tool_ls(*, workspace_root: Path, path: str = "") -> str:
 def _tool_build_context_view(
     *,
     environment: Environment,
-    task_limit: int | None = 5,
+    round_limit: int | None = 5,
     include_user_input: bool = True,
     include_task: bool = True,
     include_reply: bool = True,
@@ -176,20 +176,20 @@ def _tool_build_context_view(
     include_reply_value = _to_bool(include_reply)
     compress_value = _to_bool(compress)
 
-    if task_limit is None:
-        task_limit_value: int | None = None
+    if round_limit is None:
+        round_limit_value: int | None = None
     else:
         try:
-            task_limit_value = int(task_limit)
+            round_limit_value = int(round_limit)
         except Exception:
-            task_limit_value = 5
+            round_limit_value = 5
 
-    if task_limit_value is not None:
+    if round_limit_value is not None:
         max_limit = MAX_OBSERVATION_VIEW_WITH_TRACE_TASKS if include_trace_value else MAX_OBSERVATION_VIEW_TASKS
-        task_limit_value = max(1, min(max_limit, task_limit_value))
+        round_limit_value = max(1, min(max_limit, round_limit_value))
 
     payload = environment.build_context_view(
-        task_limit=task_limit_value,
+        round_limit=round_limit_value,
         include_user_input=include_user_input_value,
         include_task=include_task_value,
         include_reply=include_reply_value,
@@ -607,7 +607,7 @@ def route_node(
         skill_catalog=controller_catalog,
     )
     tasks_context = environment.build_controller_context(
-        default_task_limit=5,
+        default_round_limit=5,
         compress=environment_context_compress,
         compress_target_tokens=context_options.view_target_tokens,
     )
@@ -709,10 +709,10 @@ def executor_node(
 
     # 注入最近任务摘要，减少“信息不足”导致的无谓失败。
     tasks_context = environment.build_context_view(
-        task_limit=3,
-        include_user_input=False,
+        round_limit=3,
+        include_user_input=True,
         include_task=True,
-        include_reply=False,
+        include_reply=True,
         include_trace=False,
         compress=environment_context_compress,
         compress_target_tokens=context_options.view_target_tokens,
@@ -900,7 +900,7 @@ def reply_node(
 ) -> str:
     context_options = context_options or ContextCompressionOptions()
     environment_view = environment.build_context_view(
-        task_limit=None,
+        round_limit=None,
         include_user_input=True,
         include_task=True,
         include_reply=True,

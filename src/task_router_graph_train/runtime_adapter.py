@@ -64,7 +64,7 @@ def build_controller_state_input(
     return {
         "USER_INPUT": str(user_input),
         "ENVIRONMENT_JSON": environment.build_controller_context(
-            default_task_limit=5,
+            default_round_limit=5,
             compress=bool(compress),
             compress_target_tokens=compress_target_tokens,
         ),
@@ -88,7 +88,7 @@ def build_reply_state_input(
         "USER_INPUT": str(user_input),
         "FINAL_TASK_JSON": copy.deepcopy(final_task),
         "ENVIRONMENT_JSON": environment.build_context_view(
-            task_limit=None,
+            round_limit=None,
             include_user_input=True,
             include_task=True,
             include_reply=True,
