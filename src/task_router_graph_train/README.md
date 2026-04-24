@@ -38,6 +38,71 @@
   - 这里的 GRPO episode 是单步 next-action 决策
   - 不等于 runtime 一整轮 observe / generate 轨迹
 
+## Environment 机制（核心）
+
+controller policy 学的不是“看到某类 prompt 就输出某类动作”，而是“基于当前 environment 事实做下一步决策”。当前实现里，`environment` 会经过三层收口：
+
+```text
+runtime environment full state
+  -> sanitize_environment_payload(...)
+  -> formal_environment + verifier_sidecar
+  -> build_controller_state_input(...)
+  -> ENVIRONMENT_JSON
+```
+
+- `runtime environment full state`
+  - 对应运行时真实状态，schema 在 `src/task_router_graph/schema/environment.py`
+  - 包含 `rounds / cur_round / updated_at / history_summaries / history_meta_summary`
+  - 每个 round 下有 task、reply、track；这是可回放、可审计的 full state
+- `formal_environment`
+  - 由 `sanitize_environment_payload(...)` 从 raw environment 切出来
+  - 只保留正式 schema 字段，允许进入模型输入
+  - 任何 `running_refs / pending_collect / runtime_probe / idempotent_guard` 这类 verifier-only 信息都必须移到 `verifier_sidecar`
+- `ENVIRONMENT_JSON`
+  - 不是 full state，也不是原始 `environment.json`
+  - 由 `build_controller_state_input(...)` 调用 `Environment.build_controller_context(...)` 生成
+  - 它才是 controller 在 SFT / GRPO / regression 里真正看到的 environment 视图
+
+### Controller 实际看到什么
+
+`ENVIRONMENT_JSON` 的生成规则是当前训练闭环里最重要的约束之一：
+
+- 默认读取最近 `default_task_limit=5` 条 task，且默认不带 trace
+- 如果当前最后一条 task 是 `failed`，会放宽到全量 no-trace 视图，避免立即重试时缺事实
+- 会额外注入 `previous_failed_task` 摘要，但不会默认注入完整失败轨迹
+- 失败 task 在默认 controller 视图里会把 `task.result` 置空，避免把 diagnoser 文案直接当成 controller 可见事实
+- 完整失败轨迹必须通过 `previous_failed_track {}` 工具显式读取
+- 视图会带上 `history_summary_latest` 与 `history_meta_summary`，让 controller 能复用历史摘要而不是只盯最近一条 task
+
+这意味着训练时真正学的是：
+
+- 先看当前 `ENVIRONMENT_JSON` 里已经暴露的正式事实
+- 不足时再决定是否 `observe`
+- 失败重试场景优先使用 `previous_failed_track {}`
+- 而不是默认把 full trace、verifier sidecar、运行时私货全部喂给模型
+
+### 为什么它是核心机制
+
+运行时大量关键语义都编码在 environment 里，不在 prompt 花活里：
+
+- 异步派发时，source task 会先写成 `status=running`、`result=正在执行`
+- `executor + pyskill` 场景会把 `[pyskill pid=... run_id=...]` 标记追加到 task content，并写入 `dispatch_pyskill` track
+- 后续 `collect_workflows / pre_reply_collect` 回收结果时，会在当前 round 追加 `pyskill_task`
+- source task 会被回链成 `pyskill_task(round_id=..., task_id=...)`
+- `run_id` 是异步终态幂等键，同一 workflow 只能被终态回填一次
+
+所以 controller/reply/regression 真正依赖的不是“外部有人告诉它现在可能完成了”，而是 environment 里已经沉淀出来的正式事实。badcase 里的很多错误，本质上也是 environment 事实没读对，而不是语言风格问题。
+
+### 训练链路为什么必须和 runtime 对齐
+
+- `build_controller_train_records(...)`、`build_feedback_assets(...)`、`train_controller_grpo(...)` 都基于同一套 `build_controller_state_input(...)` 口径构造 state
+- `controller_state_view` 是正式配置，只允许 `compress / compress_target_tokens`
+- `compress=true` 只压缩视图里的长文本字段（如 `task.result / reply / track.return`），不改 full state、落盘结构和 dedup 真源
+- 训练资产会把 `controller_state_view` 写进 metadata；训练入口会校验输入资产和当前请求是否一致
+- `runtime_shape_preview` 这类教学/验证辅助信息只能留在 `verifier_sidecar`，不能反向喂回模型输入
+
+如果这层对齐丢了，SFT 学到的 state、feedback 回流构出来的 state、GRPO 采样时看到的 state 就会不是同一个分布，后面的 reward 和 regression 也会失真。
+
 ## 当前能力
 
 - `runtime_adapter.py`
