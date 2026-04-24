@@ -23,7 +23,6 @@ controller SFT 的最小真源位于：
 raw row 当前最小字段为：
 
 - `sample_id`
-- `step`
 - `user_input`
 - `environment`
 - `target_action`
@@ -36,6 +35,12 @@ manifest 当前最小字段为：
 - `train_size`
 - `eval_size`
 - `action_space`
+
+补充约定：
+
+- raw `teacher_source.terminal` 保持输入兼容，不改字段名
+- 进入 `TrainingRecord` 后统一落为 `metadata.source_terminal`
+- raw `target_action` 必须满足 runtime controller action schema
 
 ## 2. formal environment 与 verifier_sidecar
 
@@ -73,6 +78,10 @@ manifest 当前最小字段为：
 - `state_input` 是训练态真源，prompt 文本由后续渲染步骤生成
 - `render_controller_prompt(...)` 负责把 `state_input` 渲染成 prompt
 - badcase dedup 不应该绑定 prompt 文本或 `SKILLS_INDEX` 文本本身
+- `controller_state_view` 是正式配置，字段固定为：
+  - `compress`
+  - `compress_target_tokens`
+- `controller_state_view` 统一作用于 controller 资产构造，不能只在 GRPO 阶段单独漂移
 
 ## 4. TrainingRecord
 
@@ -86,6 +95,11 @@ manifest 当前最小字段为：
 - `reward_spec_id`
 - `split`
 - `metadata`
+
+其中 `metadata` 当前至少保留：
+
+- `source_terminal`
+- `controller_state_view`
 
 当前主训练角色是：
 
@@ -106,6 +120,8 @@ manifest 当前最小字段为：
 - `prompt`
 - `target_text`
 - `metadata`
+
+`metadata` 会沿用上游 record 中的 `source_terminal` 与 `controller_state_view`，避免 SFT / GRPO 的 state 分布失联。
 
 artifact 名称固定为：
 
@@ -163,6 +179,12 @@ manifest 关键字段包括：
 
 如果 manifest 中存在 `verl_rl_dataset_v1`，`train_controller_grpo(...)` 也可以直接消费。
 
+对 controller 相关资产还要求：
+
+- asset entry 中的 `controller_state_view` 必须与 row metadata 一致
+- `train_controller_grpo(...)` 会校验输入资产与当前请求配置是否一致
+- legacy asset 若缺少 `controller_state_view` 元信息，只能在默认未压缩口径下继续使用
+
 ## 8. controller regression records
 
 `controller_regression_records_v1` 属于回流评测专用资产。
@@ -180,6 +202,8 @@ manifest 关键字段包括：
 - `reference_action_quality`
 - `policy_output_text`
 
+这些记录服务 regression，不直接参与 controller GRPO reward 结算。
+
 `evaluate_controller_regression(...)` 会把 prediction 和这份记录一起送给 `regression_judge`。
 
 ## 9. verl RL dataset
@@ -192,6 +216,14 @@ manifest 关键字段包括：
 - `verl_rl_dataset_v1`
   - 每行已经自带 `prompt`
   - 更接近 verl 直接消费的数据形态
+
+补充约定：
+
+- `extra_info.controller_state_view` 必须存在，或明确被视为 legacy dataset
+- 如果 `teacher` 只返回 `ranking`，当前 reward 映射规则为：
+  - 候选数为 1：`1.0`
+  - 候选数为 `N > 1`：第 `rank_index` 名的 reward =
+    `(N - 1 - rank_index) / (N - 1)`
 
 文档和 notebook 都应避免把这两者混成一个概念。
 

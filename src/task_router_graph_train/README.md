@@ -11,11 +11,39 @@
 
 当前主线已经收口到“controller-only 的安全训练输入 + badcase 回流 + 单步 GRPO + regression 验证”。
 
+## Controller Policy 定义
+
+当前训练对象是外层 `controller` 的 single-step next-action policy，不是 `time_range_info` 这类 skill 内部的 search policy。
+
+- `policy_object`
+  - 外层 controller：基于 formal protocol view 决定下一步 `observe` 或 `generate_task`
+- `state`
+  - `USER_INPUT`
+  - `ENVIRONMENT_JSON`
+  - `SKILLS_INDEX`
+- `action_space`
+  - `observe`
+    - `read {"path":"..."}`
+    - `ls {"path":"..."}`
+    - `build_context_view {...}`
+    - `previous_failed_track {}`
+    - `beijing_time {}`
+    - `skill_tool {"name":"...","input":{...}}`
+  - `generate_task`
+    - `task_type in {executor, functest, accutest, perftest}`
+- `reward_signal`
+  - teacher 对同一 `state_input` 下多个 candidate action 返回 `scores_by_candidate`
+  - 或返回完整 `ranking`，再按当前实现映射成 scalar reward
+- `episode boundary`
+  - 这里的 GRPO episode 是单步 next-action 决策
+  - 不等于 runtime 一整轮 observe / generate 轨迹
+
 ## 当前能力
 
 - `runtime_adapter.py`
   - 把运行时 `Environment` 适配成训练态输入
   - 提供 `build_controller_state_input(...)` 与 `build_reply_state_input(...)`
+  - 负责 `controller_state_view` 的规范化与 runtime schema 转发
 - `dataset/`
   - 清洗 `environment`
   - 构造 `TrainingRecord`、`SftExample`
@@ -46,6 +74,10 @@
   - `reward_judge`：给 GRPO rollout candidates 打 scalar reward
   - `reference_generator`：给 badcase 生成 `reference_action`
   - `regression_judge`：独立判断 `prediction` 与 `reference_action` 是否语义等价
+- `controller_state_view`
+  - 正式配置项为 `compress / compress_target_tokens`
+  - 统一作用于 teacher bootstrap、feedback assets、records 和 RL dataset
+  - 训练入口会校验输入资产与当前请求的 `controller_state_view` 是否一致
 
 ## 当前产物类型
 
@@ -53,10 +85,12 @@
   - `train_controller_sft(...)` 默认消费的训练样本
 - `controller_training_records_v1`
   - `train_controller_grpo(...)` 默认消费的 controller records
+  - 每条 record.metadata 会保留 `source_terminal` 与 `controller_state_view`
 - `controller_regression_records_v1`
   - `evaluate_controller_regression(...)` 默认消费的回流评测样本
 - `verl_rl_dataset_v1`
   - 预渲染的 verl RL dataset；`train_controller_grpo(...)` 也可从 manifest 中直接消费
+  - `extra_info.controller_state_view` 必须与上游 records 一致
 - `feedback_run_v1`
   - 一次 badcase 回流构建的总 manifest
 
@@ -170,3 +204,18 @@ PYTHONPATH=src python -m task_router_graph_train.cli.evaluate \
 - 不把多步 / 全轨迹 GRPO 当作当前已承诺实现
 - 不把 reward model、critic、checkpoint 恢复训练写成当前版本能力
 - 不鼓励直接从散落 jsonl 路径启动训练入口
+
+## 当前 reward 映射
+
+`reward_judge` 可以返回：
+
+- 完整 `scores_by_candidate`
+- 或完整 `ranking`
+
+当 teacher 只返回 `ranking` 时，当前实现会按固定线性映射转成 reward：
+
+- 候选数为 1：reward = `1.0`
+- 候选数为 `N > 1`：第 `rank_index` 名的 reward =
+  `(N - 1 - rank_index) / (N - 1)`
+- 最优候选为 `1.0`
+- 最差候选为 `0.0`

@@ -10,6 +10,33 @@ v1 要解决的是 controller-only 的一条稳闭环：
 - 再用 `regression_judge` 验证 badcase 是否真的被修复
 - 最后把失败样本继续回流
 
+## 当前 policy 对象
+
+这里训练的是外层 `controller` policy，不是 `time_range_info` 之类 skill 内部的 search policy。
+
+- `policy_object`
+  - 基于 protocol-view state 决定 controller 下一步动作
+- `state`
+  - `USER_INPUT`
+  - `ENVIRONMENT_JSON`
+  - `SKILLS_INDEX`
+- `action_space`
+  - `observe`
+    - `read {"path":"..."}`
+    - `ls {"path":"..."}`
+    - `build_context_view {...}`
+    - `previous_failed_track {}`
+    - `beijing_time {}`
+    - `skill_tool {"name":"...","input":{...}}`
+  - `generate_task`
+    - `task_type in {executor, functest, accutest, perftest}`
+- `reward_signal`
+  - teacher 对同一 `state` 下多个 candidate action 返回 `scores_by_candidate`
+  - 或返回 `ranking`，再映射成 scalar reward
+- `episode boundary`
+  - 当前 GRPO 是 single-step next-action episode
+  - 不把 runtime 整轮轨迹当作一个 RL episode
+
 ## 为什么是这条路线
 
 最近几轮提交已经把工程事实收口成下面几点：
@@ -52,6 +79,7 @@ v1 要解决的是 controller-only 的一条稳闭环：
 
 - 把 raw `environment` 切成 `formal_environment + verifier_sidecar`
 - 固定 controller `state_input` 为 `USER_INPUT / ENVIRONMENT_JSON / SKILLS_INDEX`
+- 把 `controller_state_view` 收口成正式配置：`compress / compress_target_tokens`
 
 关键函数：
 
@@ -65,6 +93,7 @@ v1 要解决的是 controller-only 的一条稳闭环：
 
 - 先让 controller 稳定输出合法动作 JSON
 - 先把 schema、动作种类、基本环境事实对齐做稳
+- 训练侧动作校验与 runtime action schema 完全对齐
 
 真源：
 
@@ -123,6 +152,7 @@ v1 要解决的是 controller-only 的一条稳闭环：
 - single-step controller
 - online teacher reward
 - `verl` update backend
+- 输入资产与当前请求的 `controller_state_view` 必须完全一致
 
 补充约定：
 
@@ -168,6 +198,10 @@ v1 要解决的是 controller-only 的一条稳闭环：
 - 输入：同组 rollout candidates
 - 输出：每个 response 的 scalar reward
 - 不做：生成 `reference_action`
+- 若只返回 `ranking`，当前实现按线性规则映射成 reward：
+  - 候选数为 1：`1.0`
+  - 候选数为 `N > 1`：第 `rank_index` 名的 reward =
+    `(N - 1 - rank_index) / (N - 1)`
 
 ### reference_generator
 
@@ -180,6 +214,18 @@ v1 要解决的是 controller-only 的一条稳闭环：
 - 输入：`state + reference_action + predicted_action`
 - 输出：`semantic_equivalent / score / reason`
 - 不做：训练 gold 构造
+
+## terminal 语义
+
+这里要区分两个层次：
+
+- `teacher_source.terminal`
+  - 原始 teacher 样本字段
+  - 进入 `TrainingRecord.metadata.source_terminal`
+  - 表示示教链路里的终止属性
+- `GRPO episode boundary`
+  - 当前 single-step controller 训练里，每条样本就是一个 next-action episode
+  - 不应把 `teacher_source.terminal` 直接等同为 RL episode 终点
 
 ## 当前门禁策略
 

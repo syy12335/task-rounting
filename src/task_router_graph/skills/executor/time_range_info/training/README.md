@@ -2,6 +2,11 @@
 
 本目录只定义 `time_range_info` skill 内部的训练契约，不实现训练脚本。
 
+边界说明：
+
+- 这里描述的是 `time_range_info` skill 内部的 search / refine / verify / answer 策略
+- 不覆盖外层 `controller` 的 single-step routing / observe / generate_task policy
+
 ## 1. runtime trace
 
 worker 每次运行都会在 `task_result.trace` 中返回：
