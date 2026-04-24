@@ -67,12 +67,12 @@ runtime environment full state
 
 `ENVIRONMENT_JSON` 的生成规则是当前训练闭环里最重要的约束之一：
 
-- 默认读取最近 `default_task_limit=5` 条 task，且默认不带 trace
-- 如果当前最后一条 task 是 `failed`，会放宽到全量 no-trace 视图，避免立即重试时缺事实
+- 默认读取最近 `default_round_limit=5` 个 round，且默认不带 trace
+- 如果当前最后一个 round 的最后一条 task 是 `failed`，会放宽到全量 no-trace 视图，避免立即重试时缺事实
 - 会额外注入 `previous_failed_task` 摘要，但不会默认注入完整失败轨迹
 - 失败 task 在默认 controller 视图里会把 `task.result` 置空，避免把 diagnoser 文案直接当成 controller 可见事实
 - 完整失败轨迹必须通过 `previous_failed_track {}` 工具显式读取
-- 视图会带上 `history_summary_latest` 与 `history_meta_summary`，让 controller 能复用历史摘要而不是只盯最近一条 task
+- 视图会带上 `history_summary_latest` 与 `history_meta_summary`，让 controller 能复用历史摘要而不是只盯最近一轮
 
 这意味着训练时真正学的是：
 
