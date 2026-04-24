@@ -30,7 +30,7 @@ def test_build_feedback_assets_reports_uncovered_buckets(monkeypatch: pytest.Mon
                 "action_kind": "observe",
                 "reason": "继续读状态",
                 "tool": "build_context_view",
-                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
+                "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
             }
         else:
             action = {

@@ -1055,13 +1055,13 @@ def _mutate_action(action: dict[str, Any], *, rng: random.Random) -> dict[str, A
                 "action_kind": "observe",
                 "reason": "继续观察，但未明确推进条件。",
                 "tool": "build_context_view",
-                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
+                "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
             },
             {
                 "action_kind": "observe",
                 "reason": "虚构状态：系统已经完成全部任务。",
                 "tool": "build_context_view",
-                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
+                "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
             },
         ]
         return copy.deepcopy(rng.choice(variants))
@@ -1071,7 +1071,7 @@ def _mutate_action(action: dict[str, Any], *, rng: random.Random) -> dict[str, A
                 "action_kind": "observe",
                 "reason": "先读一下，但忽略了当前应新建任务。",
                 "tool": "build_context_view",
-                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
+                "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
             },
             {
                 "action_kind": "generate_task",

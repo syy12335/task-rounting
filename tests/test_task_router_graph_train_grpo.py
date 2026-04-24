@@ -31,7 +31,7 @@ def test_validate_controller_action_for_observe_and_generate_task() -> None:
             "action_kind": "observe",
             "reason": "先读状态",
             "tool": "build_context_view",
-            "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
+            "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
         }
     )
     assert observe_ok is True
@@ -72,11 +72,11 @@ def test_training_and_teacher_action_validators_share_runtime_contract() -> None
                 "reason": "读当前结构",
                 "tool": "build_context_view",
                 "args": {
-                    "task_limit": 3,
+                    "round_limit": 3,
                     "include_trace": False,
-                    "include_user_input": False,
+                    "include_user_input": True,
                     "include_task": True,
-                    "include_reply": False,
+                    "include_reply": True,
                 },
             },
             True,
