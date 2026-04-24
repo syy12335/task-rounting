@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from task_router_graph.schema import Environment
+from task_router_graph.schema import Environment, validate_controller_action_dict
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 DOCS_ROOT = PACKAGE_ROOT / "docs"
@@ -13,6 +13,39 @@ ASSETS_ROOT = PACKAGE_ROOT / "assets"
 CONFIGS_ROOT = PACKAGE_ROOT / "configs"
 REPO_ROOT = PACKAGE_ROOT.parents[1]
 DEFAULT_RUNTIME_SKILLS_ROOT = "src/task_router_graph/skills"
+DEFAULT_CONTROLLER_STATE_VIEW: dict[str, Any] = {
+    "compress": False,
+    "compress_target_tokens": None,
+}
+
+
+def normalize_controller_state_view(
+    payload: dict[str, Any] | None = None,
+    *,
+    compress: Any = None,
+    compress_target_tokens: Any = None,
+) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    resolved_compress = source.get("compress") if compress is None else compress
+    resolved_target = source.get("compress_target_tokens") if compress_target_tokens is None else compress_target_tokens
+    normalized_target: int | None
+    if resolved_target in (None, ""):
+        normalized_target = None
+    else:
+        normalized_target = int(resolved_target)
+    return {
+        "compress": bool(resolved_compress),
+        "compress_target_tokens": normalized_target,
+    }
+
+
+def resolve_controller_state_view_from_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = config.get("controller_state_view", {}) if isinstance(config, dict) else {}
+    return normalize_controller_state_view(payload)
+
+
+def validate_runtime_controller_action(action: dict[str, Any]) -> tuple[bool, list[str]]:
+    return validate_controller_action_dict(action)
 
 
 def build_controller_state_input(
@@ -21,6 +54,8 @@ def build_controller_state_input(
     environment_payload: dict[str, Any],
     workspace_root: Path | None = None,
     skills_root: str = DEFAULT_RUNTIME_SKILLS_ROOT,
+    compress: bool = False,
+    compress_target_tokens: int | None = None,
 ) -> dict[str, Any]:
     # controller 训练态真正看到的 state 真源就在这里。
     # 它把 runtime Environment 收敛成训练时可比较、可重复构造的正式输入。
@@ -30,7 +65,8 @@ def build_controller_state_input(
         "USER_INPUT": str(user_input),
         "ENVIRONMENT_JSON": environment.build_controller_context(
             default_task_limit=5,
-            compress=False,
+            compress=bool(compress),
+            compress_target_tokens=compress_target_tokens,
         ),
         "SKILLS_INDEX": _build_skill_registry_preview(
             workspace_root=runtime_root,

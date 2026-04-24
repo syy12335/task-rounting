@@ -30,11 +30,15 @@ from .reward_specs import REWARD_SPECS
 from .runtime_adapter import (
     ASSETS_ROOT,
     CONFIGS_ROOT,
+    DEFAULT_CONTROLLER_STATE_VIEW,
     DOCS_ROOT,
     PACKAGE_ROOT,
     REPO_ROOT,
     build_controller_state_input,
     build_reply_state_input,
+    normalize_controller_state_view,
+    resolve_controller_state_view_from_config,
+    validate_runtime_controller_action,
 )
 from .train import (
     ControllerSftJsonlDataset,
@@ -55,6 +59,7 @@ __all__ = [
     "ControllerSftJsonlDataset",
     "DEFAULT_SFT_OUTPUT_ROOT",
     "DEFAULT_SFT_TEACHER_SOURCE_DIR",
+    "DEFAULT_CONTROLLER_STATE_VIEW",
     "DOCS_ROOT",
     "FORMAL_ENVIRONMENT_KEYS",
     "PACKAGE_ROOT",
@@ -78,6 +83,7 @@ __all__ = [
     "harvest_failed_badcases",
     "load_eval_sample_triplets",
     "load_sft_examples",
+    "normalize_controller_state_view",
     "read_jsonl",
     "render_controller_prompt",
     "render_controller_target_text",
@@ -87,7 +93,9 @@ __all__ = [
     "train_controller_grpo",
     "train_controller_sft",
     "validate_controller_action",
+    "validate_runtime_controller_action",
     "validate_teacher_rankings",
+    "resolve_controller_state_view_from_config",
     "write_controller_sft_assets",
     "write_jsonl",
 ]

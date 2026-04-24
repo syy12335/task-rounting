@@ -3,176 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from jsonschema import ValidationError, validate
+from jsonschema import ValidationError
 
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
 from .memory import AgentMemory, ContextCompressionOptions
-from ..protocol_constants import ARG_INPUT, ARG_NAME, TOOL_SKILL_TOOL
-
-
-_OBSERVE_READ_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "read"},
-        "args": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "minLength": 1},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_OBSERVE_LS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "ls"},
-        "args": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "minLength": 1},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_OBSERVE_BUILD_VIEW_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "build_context_view"},
-        "args": {
-            "type": "object",
-            "properties": {
-                "task_limit": {"type": ["integer", "null"], "minimum": 1},
-                "include_user_input": {"type": ["boolean", "integer", "string"]},
-                "include_task": {"type": ["boolean", "integer", "string"]},
-                "include_reply": {"type": ["boolean", "integer", "string"]},
-                "include_trace": {"type": ["boolean", "integer", "string"]},
-                "compress": {"type": ["boolean", "integer", "string"]},
-                "compress_target_tokens": {"type": ["integer", "null"], "minimum": 80},
-            },
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_OBSERVE_PREVIOUS_FAILED_TRACK_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "previous_failed_track"},
-        "args": {
-            "type": "object",
-            "maxProperties": 0,
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_OBSERVE_BEIJING_TIME_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "beijing_time"},
-        "args": {
-            "type": "object",
-            "maxProperties": 0,
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": TOOL_SKILL_TOOL},
-        "args": {
-            "type": "object",
-            "properties": {
-                ARG_NAME: {"type": "string", "minLength": 1},
-                ARG_INPUT: {"type": "object"},
-            },
-            "required": [ARG_NAME, ARG_INPUT],
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
-
-_CONTROLLER_ACTION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "oneOf": [
-        _OBSERVE_READ_SCHEMA,
-        _OBSERVE_LS_SCHEMA,
-        _OBSERVE_BUILD_VIEW_SCHEMA,
-        _OBSERVE_PREVIOUS_FAILED_TRACK_SCHEMA,
-        _OBSERVE_BEIJING_TIME_SCHEMA,
-        _OBSERVE_SKILL_TOOL_SCHEMA,
-        {
-            "type": "object",
-            "properties": {
-                "action_kind": {"const": "generate_task"},
-                "task_type": {
-                    "type": "string",
-                    "enum": ["executor", "functest", "accutest", "perftest"],
-                },
-                "task_content": {"type": "string", "minLength": 1},
-                "reason": {"type": "string", "minLength": 1},
-            },
-            "required": ["action_kind", "task_type", "task_content", "reason"],
-            "additionalProperties": False,
-        },
-    ],
-}
-
-_OUTPUT_CONSTRAINTS: dict[str, Any] = {
-    "output_format": "json_object",
-    "action_kind_enum": ["observe", "generate_task"],
-    "observe_required": ["action_kind", "tool", "args", "reason"],
-    "observe_tool_enum": [
-        "read",
-        "ls",
-        "build_context_view",
-        "previous_failed_track",
-        "beijing_time",
-        TOOL_SKILL_TOOL,
-    ],
-    "generate_task_required": ["action_kind", "task_type", "task_content", "reason"],
-    "forbid_additional_properties": True,
-    "observe_tool_args_required": {
-        "read": ["path"],
-        "ls": ["path"],
-        "build_context_view": [],
-        "previous_failed_track": [],
-        "beijing_time": [],
-        TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
-    },
-}
+from ..schema import CONTROLLER_ACTION_SCHEMA, CONTROLLER_OUTPUT_CONSTRAINTS, validate_controller_action_payload
 
 
 class ControllerRouteError(ValueError):
@@ -212,13 +47,13 @@ class ControllerAgent:
         )
         llm = self.llm.bind(
             response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "controller_action",
-                    "strict": True,
-                    "schema": _CONTROLLER_ACTION_SCHEMA,
-                },
-            }
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "controller_action",
+                        "strict": True,
+                        "schema": CONTROLLER_ACTION_SCHEMA,
+                    },
+                }
         )
 
         memory = AgentMemory(
@@ -334,7 +169,7 @@ class ControllerAgent:
 
 
 def _validate_controller_action(action: dict[str, Any]) -> None:
-    validate(instance=action, schema=_CONTROLLER_ACTION_SCHEMA)
+    validate_controller_action_payload(action)
 
 
 def _normalize_action_kind(action: dict[str, Any]) -> str:

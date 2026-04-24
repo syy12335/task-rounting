@@ -11,7 +11,7 @@ from ..dataset import (
     build_controller_train_records,
     write_controller_sft_assets,
 )
-from ..runtime_adapter import REPO_ROOT
+from ..runtime_adapter import REPO_ROOT, normalize_controller_state_view
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +31,17 @@ def parse_args() -> argparse.Namespace:
         default=str(REPO_ROOT),
         help="Repository root used to resolve runtime skills for controller state construction.",
     )
+    parser.add_argument(
+        "--compress-controller-state-view",
+        action="store_true",
+        help="Build controller teacher bootstrap assets with compressed ENVIRONMENT_JSON view.",
+    )
+    parser.add_argument(
+        "--controller-view-target-tokens",
+        type=int,
+        default=None,
+        help="Optional token budget for compressed controller ENVIRONMENT_JSON view.",
+    )
     return parser.parse_args()
 
 
@@ -39,10 +50,15 @@ def main() -> None:
     teacher_source_dir = Path(args.teacher_source_dir).resolve()
     output_root = Path(args.output_root).resolve()
     runtime_root = Path(args.runtime_root).resolve()
+    controller_state_view = normalize_controller_state_view(
+        compress=bool(args.compress_controller_state_view),
+        compress_target_tokens=args.controller_view_target_tokens,
+    )
 
     records, manifest = build_controller_train_records(
         teacher_source_dir=teacher_source_dir,
         workspace_root=runtime_root,
+        controller_state_view=controller_state_view,
     )
     output_paths = write_controller_sft_assets(
         output_root=output_root,

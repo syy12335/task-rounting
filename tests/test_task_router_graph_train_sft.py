@@ -10,7 +10,7 @@ from task_router_graph_train.dataset import (
     read_jsonl,
     write_controller_sft_assets,
 )
-from task_router_graph_train.runtime_adapter import ASSETS_ROOT, REPO_ROOT
+from task_router_graph_train.runtime_adapter import ASSETS_ROOT, REPO_ROOT, normalize_controller_state_view
 from task_router_graph_train.train import build_sft_token_labels, tokenize_sft_example
 from task_router_graph_train.types import SftExample
 
@@ -47,9 +47,13 @@ def test_build_controller_train_records_from_teacher_source() -> None:
     sample = next(record for record in records if record.sample_id == "teacher_train_009_retry_failed_task_step1")
     assert set(sample.state_input) == {"USER_INPUT", "ENVIRONMENT_JSON", "SKILLS_INDEX"}
     assert "running_refs" not in json.dumps(sample.state_input, ensure_ascii=False)
-    assert sample.metadata == {"terminal": False}
+    assert sample.metadata == {
+        "source_terminal": False,
+        "controller_state_view": normalize_controller_state_view(),
+    }
     assert sample.gold_output["action_kind"] == "generate_task"
     assert manifest["action_space"] == ["observe", "generate_task"]
+    assert manifest["controller_state_view"] == normalize_controller_state_view()
 
 
 def test_build_controller_sft_examples_contains_prompt_sections() -> None:
@@ -67,7 +71,10 @@ def test_build_controller_sft_examples_contains_prompt_sections() -> None:
     target_json = json.loads(example.target_text)
     assert isinstance(target_json, dict)
     assert target_json["action_kind"] == "generate_task"
-    assert example.metadata == {"terminal": False}
+    assert example.metadata == {
+        "source_terminal": False,
+        "controller_state_view": normalize_controller_state_view(),
+    }
 
 
 def test_build_controller_train_records_rejects_action_kind_outside_manifest(tmp_path: Path) -> None:
@@ -144,6 +151,19 @@ def test_build_controller_train_records_requires_terminal_only_contract(tmp_path
         raise AssertionError("expected extra key validation to fail")
 
 
+def test_build_controller_train_records_supports_configured_controller_state_view() -> None:
+    records, manifest = build_controller_train_records(
+        teacher_source_dir=ASSETS_ROOT / "sft_v1" / "teacher_source",
+        workspace_root=REPO_ROOT,
+        controller_state_view={"compress": True, "compress_target_tokens": 120},
+    )
+    sample = records[0]
+    assert sample.metadata["controller_state_view"] == {"compress": True, "compress_target_tokens": 120}
+    assert manifest["controller_state_view"] == {"compress": True, "compress_target_tokens": 120}
+    payload_text = json.dumps(sample.state_input["ENVIRONMENT_JSON"], ensure_ascii=False)
+    assert "[COMPACTED_VIEW]" not in payload_text or sample.state_input["ENVIRONMENT_JSON"]["tasks"] == []
+
+
 def test_build_sft_token_labels_masks_prompt_tokens() -> None:
     feature_row = build_sft_token_labels(
         prompt_token_ids=[1, 2, 3],
@@ -162,7 +182,7 @@ def test_tokenize_sft_example_uses_only_target_tokens_for_loss() -> None:
         split="train",
         prompt="USER_INPUT\n继续",
         target_text='{"action_kind": "observe"}',
-        metadata={"terminal": False},
+        metadata={"source_terminal": False},
     )
 
     feature_row = tokenize_sft_example(
@@ -174,7 +194,7 @@ def test_tokenize_sft_example_uses_only_target_tokens_for_loss() -> None:
     prompt_length = len(FakeTokenizer().encode(example.prompt))
     assert feature_row["labels"][:prompt_length] == [-100] * prompt_length
     assert feature_row["labels"][-1] == FakeTokenizer.eos_token_id
-    assert feature_row["metadata"] == {"terminal": False}
+    assert feature_row["metadata"] == {"source_terminal": False}
 
 
 def test_write_controller_sft_assets_smoke(tmp_path: Path) -> None:
@@ -200,3 +220,4 @@ def test_write_controller_sft_assets_smoke(tmp_path: Path) -> None:
 
     written_manifest = json.loads(output_paths["manifest_path"].read_text(encoding="utf-8"))
     assert "reward_spec_ids" not in written_manifest
+    assert written_manifest["controller_state_view"] == normalize_controller_state_view()

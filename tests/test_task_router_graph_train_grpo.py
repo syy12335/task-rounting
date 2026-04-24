@@ -18,7 +18,11 @@ from task_router_graph_train.train import (
 from task_router_graph_train.train import controller_grpo as controller_grpo_module
 from task_router_graph_train.train.controller_grpo import DEFAULT_GRPO_CONFIG_PATH
 from task_router_graph_train.train.controller_grpo_reward import score_group_candidates
-from task_router_graph_train.train.controller_grpo_teacher import normalize_teacher_result
+from task_router_graph_train.train.controller_grpo_teacher import (
+    normalize_teacher_result,
+    ranking_to_rewards,
+    validate_action_dict,
+)
 
 
 def test_validate_controller_action_for_observe_and_generate_task() -> None:
@@ -26,10 +30,8 @@ def test_validate_controller_action_for_observe_and_generate_task() -> None:
         {
             "action_kind": "observe",
             "reason": "先读状态",
-            "tool": "read",
-            "args": {"target": "latest_round"},
-            "task_type": None,
-            "task_content": None,
+            "tool": "build_context_view",
+            "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
         }
     )
     assert observe_ok is True
@@ -39,8 +41,6 @@ def test_validate_controller_action_for_observe_and_generate_task() -> None:
         {
             "action_kind": "generate_task",
             "reason": "创建功能测试任务",
-            "tool": None,
-            "args": {},
             "task_type": "functest",
             "task_content": "执行登录流程功能测试",
         }
@@ -50,7 +50,82 @@ def test_validate_controller_action_for_observe_and_generate_task() -> None:
 
     invalid_ok, invalid_errors = validate_controller_action({"action_kind": "invalid"})
     assert invalid_ok is False
-    assert "action_kind must be one of" in invalid_errors[0]
+    assert invalid_errors
+
+    invalid_observe_ok, invalid_observe_errors = validate_controller_action(
+        {
+            "action_kind": "observe",
+            "reason": "先读状态",
+            "tool": "read",
+            "args": {"target": "latest_round"},
+        }
+    )
+    assert invalid_observe_ok is False
+    assert invalid_observe_errors
+
+
+def test_training_and_teacher_action_validators_share_runtime_contract() -> None:
+    cases = [
+        (
+            {
+                "action_kind": "observe",
+                "reason": "读当前结构",
+                "tool": "build_context_view",
+                "args": {
+                    "task_limit": 3,
+                    "include_trace": False,
+                    "include_user_input": False,
+                    "include_task": True,
+                    "include_reply": False,
+                },
+            },
+            True,
+        ),
+        (
+            {
+                "action_kind": "observe",
+                "reason": "非法工具",
+                "tool": "unknown_tool",
+                "args": {},
+            },
+            False,
+        ),
+        (
+            {
+                "action_kind": "observe",
+                "reason": "非法参数",
+                "tool": "build_context_view",
+                "args": {"target": "latest_round"},
+            },
+            False,
+        ),
+        (
+            {
+                "action_kind": "generate_task",
+                "reason": "创建任务",
+                "task_type": "unsupported",
+                "task_content": "do something",
+            },
+            False,
+        ),
+        (
+            {
+                "action_kind": "generate_task",
+                "reason": "创建任务",
+                "task_type": "functest",
+                "task_content": "执行登录流程功能测试",
+                "extra": "forbidden",
+            },
+            False,
+        ),
+    ]
+
+    for action, expected_valid in cases:
+        train_valid, _ = validate_controller_action(action)
+        teacher_valid, _ = validate_action_dict(action)
+        assert train_valid is expected_valid
+        assert teacher_valid is expected_valid
+        assert train_valid == teacher_valid
 
 
 def test_build_grpo_rollout_groups_is_debug_only_helper() -> None:
@@ -113,6 +188,16 @@ def test_normalize_teacher_result_supports_scores_and_ranking_only() -> None:
         "cand_01": 1.0,
         "cand_02": 0.5,
         "cand_00": 0.0,
+    }
+
+
+def test_ranking_to_rewards_uses_documented_linear_mapping() -> None:
+    assert ranking_to_rewards(["cand_00"]) == {"cand_00": 1.0}
+    assert ranking_to_rewards(["cand_00", "cand_01", "cand_02", "cand_03"]) == {
+        "cand_00": 1.0,
+        "cand_01": 0.666667,
+        "cand_02": 0.333333,
+        "cand_03": 0.0,
     }
 
 
@@ -213,6 +298,7 @@ def test_default_online_config_values() -> None:
     assert config["teacher"]["regression_judge"]["rubric_id"] == "controller_regression_judge_v1"
     assert config["update"]["backend"] == "verl"
     assert config["update"]["adv_estimator"] == "grpo"
+    assert config["controller_state_view"] == {"compress": False, "compress_target_tokens": None}
     assert config["debug"]["allow_gold_mutate"] is False
     assert config["debug"]["allow_oracle_file_teacher"] is False
 
@@ -259,6 +345,10 @@ def test_train_controller_grpo_export_only_uses_default_online_path(
     assert "prompt_text" in extra_info
     assert extra_info["num_candidates"] == report["num_candidates"]
     assert extra_info["teacher_context"]["mode"] == "online"
+    assert extra_info["controller_state_view"] == {"compress": False, "compress_target_tokens": None}
+    assert report["controller_state_view"] == {"compress": False, "compress_target_tokens": None}
+    assert report["input_controller_state_view"] == {"compress": False, "compress_target_tokens": None}
+    assert report["input_controller_state_view_legacy"] is False
 
 
 def test_train_controller_grpo_directly_launches_verl(
@@ -313,3 +403,48 @@ def test_train_controller_grpo_rejects_oracle_teacher_on_default_path(
 def test_build_teacher_rankings_oracle_helper_still_available_for_debug() -> None:
     ranking_rows = build_teacher_rankings(groups=[], mode="oracle")
     assert ranking_rows == []
+
+
+def test_train_controller_grpo_rejects_legacy_records_when_requested_view_is_compressed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("API_KEY_Qwen", "dummy-online-key")
+    train_records = tmp_path / "train_records.jsonl"
+    eval_records = tmp_path / "eval_records.jsonl"
+    base_row = {
+        "sample_id": "ctrl_001",
+        "role": "controller",
+        "split": "train",
+        "state_input": {"USER_INPUT": "u", "ENVIRONMENT_JSON": {}, "SKILLS_INDEX": "[]"},
+        "gold_output": {
+            "action_kind": "generate_task",
+            "reason": "创建任务",
+            "task_type": "functest",
+            "task_content": "执行登录流程功能测试",
+        },
+        "verifier_sidecar": {},
+        "reward_spec_id": "controller_v1",
+        "metadata": {},
+    }
+    train_records.write_text(json.dumps(base_row, ensure_ascii=False) + "\n", encoding="utf-8")
+    eval_row = dict(base_row)
+    eval_row["sample_id"] = "ctrl_002"
+    eval_row["split"] = "eval"
+    eval_records.write_text(json.dumps(eval_row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    compressed_config = tmp_path / "controller_grpo_online.yaml"
+    config = controller_grpo_module._load_training_config(DEFAULT_GRPO_CONFIG_PATH)
+    config["controller_state_view"] = {"compress": True, "compress_target_tokens": 120}
+    compressed_config.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="controller_state_view mismatch"):
+        train_controller_grpo(
+            output_dir=tmp_path / "grpo_out",
+            config_path=compressed_config,
+            train_records=train_records,
+            eval_records=eval_records,
+            allow_unsafe_path_input=True,
+            model_name_or_path="/tmp/mock-policy",
+            export_only=True,
+        )

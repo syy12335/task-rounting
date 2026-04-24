@@ -9,6 +9,8 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from ..runtime_adapter import validate_runtime_controller_action
+
 ALLOWED_ACTION_KINDS = {"observe", "generate_task"}
 DEFAULT_TEACHER_DATA_SOURCE = "task_router_graph_train/controller_grpo_online"
 DEFAULT_TEACHER_ROLE = "reward_judge"
@@ -130,28 +132,7 @@ def parse_candidate_action(raw_text: str) -> tuple[dict[str, Any] | None, list[s
 
 
 def validate_action_dict(action: dict[str, Any]) -> tuple[bool, list[str]]:
-    errors: list[str] = []
-    action_kind = str(action.get("action_kind", "")).strip()
-    if action_kind not in ALLOWED_ACTION_KINDS:
-        errors.append(f"action_kind must be one of {sorted(ALLOWED_ACTION_KINDS)}")
-        return False, errors
-
-    if action_kind == "observe":
-        tool = action.get("tool")
-        args = action.get("args")
-        if not isinstance(tool, str) or not tool.strip():
-            errors.append("observe action must provide non-empty tool")
-        if not isinstance(args, dict):
-            errors.append("observe action must provide args object")
-    elif action_kind == "generate_task":
-        task_type = action.get("task_type")
-        task_content = action.get("task_content")
-        if not isinstance(task_type, str) or not task_type.strip():
-            errors.append("generate_task action must provide non-empty task_type")
-        if not isinstance(task_content, str) or not task_content.strip():
-            errors.append("generate_task action must provide non-empty task_content")
-
-    return len(errors) == 0, errors
+    return validate_runtime_controller_action(action)
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -347,10 +328,14 @@ def generate_reference_action(
             "reference_action": {
                 "action_kind": "observe",
                 "reason": "string",
-                "tool": "read",
-                "args": {"target": "latest_round"},
-                "task_type": None,
-                "task_content": None,
+                "tool": "build_context_view",
+                "args": {
+                    "task_limit": 3,
+                    "include_trace": False,
+                    "include_user_input": False,
+                    "include_task": True,
+                    "include_reply": False,
+                },
             },
             "confidence": "0~1",
             "reason": "string",

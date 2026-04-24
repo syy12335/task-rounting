@@ -29,17 +29,13 @@ def test_build_feedback_assets_reports_uncovered_buckets(monkeypatch: pytest.Mon
             action = {
                 "action_kind": "observe",
                 "reason": "继续读状态",
-                "tool": "read",
-                "args": {"target": "latest_round"},
-                "task_type": None,
-                "task_content": None,
+                "tool": "build_context_view",
+                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
             }
         else:
             action = {
                 "action_kind": "generate_task",
                 "reason": "重新建功能测试任务",
-                "tool": None,
-                "args": {},
                 "task_type": "functest",
                 "task_content": "执行登录流程功能测试",
             }
@@ -95,6 +91,10 @@ def test_build_feedback_assets_reports_uncovered_buckets(monkeypatch: pytest.Mon
     assert "E1|repeated_observe" in manifest["coverage"]["uncovered_buckets"]
     assert manifest["stats"]["regression_count"] == 1
     assert manifest["stats"]["grpo_train_count"] + manifest["stats"]["grpo_eval_count"] == 2
+    assert manifest["assets"]["controller_training_records_v1"]["controller_state_view"] == {
+        "compress": False,
+        "compress_target_tokens": None,
+    }
 
 
 def test_evaluate_controller_regression_uses_independent_teacher_judge(
@@ -120,8 +120,6 @@ def test_evaluate_controller_regression_uses_independent_teacher_judge(
                 "reference_action": {
                     "action_kind": "generate_task",
                     "reason": "创建功能测试任务",
-                    "tool": None,
-                    "args": {},
                     "task_type": "functest",
                     "task_content": "执行登录流程功能测试，覆盖正常登录和验证码异常",
                 },
@@ -133,14 +131,12 @@ def test_evaluate_controller_regression_uses_independent_teacher_judge(
         [
             {
                 "sample_id": "reg_001",
-                "prediction": {
-                    "action_kind": "generate_task",
-                    "reason": "生成任务",
-                    "tool": None,
-                    "args": {},
-                    "task_type": "functest",
-                    "task_content": "对登录链路做功能测试，检查成功登录和验证码异常场景",
-                },
+                    "prediction": {
+                        "action_kind": "generate_task",
+                        "reason": "生成任务",
+                        "task_type": "functest",
+                        "task_content": "对登录链路做功能测试，检查成功登录和验证码异常场景",
+                    },
             }
         ],
     )

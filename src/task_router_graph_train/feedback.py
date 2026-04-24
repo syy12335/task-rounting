@@ -25,7 +25,12 @@ from .artifacts import (
 )
 from .dataset import render_controller_prompt, render_controller_target_text, sanitize_environment_payload, write_jsonl
 from .reward_specs import CONTROLLER_REWARD_SPEC_ID
-from .runtime_adapter import CONFIGS_ROOT, REPO_ROOT, build_controller_state_input
+from .runtime_adapter import (
+    CONFIGS_ROOT,
+    REPO_ROOT,
+    build_controller_state_input,
+    resolve_controller_state_view_from_config,
+)
 from .train.controller_grpo_teacher import (
     generate_reference_action,
     sanitize_teacher_config_for_report,
@@ -50,6 +55,7 @@ def build_feedback_assets(
     effective_config = _load_feedback_config(config_path or DEFAULT_FEEDBACK_CONFIG_PATH)
     feedback_cfg = dict(effective_config.get("feedback", {}))
     reference_teacher = resolve_teacher_config(effective_config, role="reference_generator")
+    controller_state_view = resolve_controller_state_view_from_config(effective_config)
     runtime_repo_root = (runtime_root or REPO_ROOT).resolve()
 
     resolved_run_id = run_id or build_run_id("feedback")
@@ -62,6 +68,7 @@ def build_feedback_assets(
         source_badcase_path=resolved_badcase_path,
         config_path=config_path or DEFAULT_FEEDBACK_CONFIG_PATH,
         config_snapshot={
+            "controller_state_view": copy.deepcopy(controller_state_view),
             "feedback": copy.deepcopy(feedback_cfg),
             "teacher": {
                 "reference_generator": sanitize_teacher_config_for_report(reference_teacher),
@@ -97,6 +104,8 @@ def build_feedback_assets(
                 user_input=row["user_input"],
                 environment_payload=copy.deepcopy(row["environment_formal"]),
                 workspace_root=runtime_repo_root,
+                compress=bool(controller_state_view["compress"]),
+                compress_target_tokens=controller_state_view["compress_target_tokens"],
             )
             row["state_input"] = state_input
 
@@ -154,6 +163,7 @@ def build_feedback_assets(
                     "error_tags": list(row["error_tags"]),
                     "policy_output_text": row["policy_output_text"],
                     "reference_action_quality": reference_quality,
+                    "controller_state_view": copy.deepcopy(controller_state_view),
                 },
             )
             controller_records.append(record)
@@ -229,6 +239,7 @@ def build_feedback_assets(
                                 "error_code": item["error_code"],
                                 "error_tags": list(item["error_tags"]),
                                 "reference_confidence": float(reference_generation["confidence"]),
+                                "controller_state_view": copy.deepcopy(controller_state_view),
                             },
                         )
                     )
@@ -282,15 +293,18 @@ def build_feedback_assets(
                 "artifact_type": SFT_EXAMPLES_ARTIFACT_TYPE,
                 "train_path": to_safe_path(sft_train_path),
                 "eval_path": to_safe_path(sft_eval_path),
+                "controller_state_view": copy.deepcopy(controller_state_view),
             },
             "controller_training_records_v1": {
                 "artifact_type": CONTROLLER_TRAINING_RECORDS_ARTIFACT_TYPE,
                 "train_path": to_safe_path(controller_train_path),
                 "eval_path": to_safe_path(controller_eval_path),
+                "controller_state_view": copy.deepcopy(controller_state_view),
             },
             "controller_regression_records_v1": {
                 "artifact_type": CONTROLLER_REGRESSION_RECORDS_ARTIFACT_TYPE,
                 "path": to_safe_path(regression_path),
+                "controller_state_view": copy.deepcopy(controller_state_view),
             },
         }
         manifest = refresh_manifest(manifest, status="completed")

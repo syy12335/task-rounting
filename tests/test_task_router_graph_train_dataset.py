@@ -91,3 +91,38 @@ def test_build_controller_state_input_uses_runtime_shape() -> None:
     assert environment_json["cur_round"] == 1
     assert environment_json["previous_failed_task"]["task"]["status"] == "failed"
     assert '"name"' in state_input["SKILLS_INDEX"]
+
+
+def test_build_controller_state_input_supports_compressed_view() -> None:
+    environment_payload = {
+        "cur_round": 2,
+        "rounds": [
+            {
+                "round_id": 2,
+                "user_input": "继续",
+                "tasks": [
+                    {
+                        "task_id": 1,
+                        "task": {
+                            "task_id": 1,
+                            "type": "executor",
+                            "content": "查询昨日大事",
+                            "status": "done",
+                            "result": "x" * 600,
+                        },
+                        "reply": "y" * 300,
+                        "track": [],
+                    }
+                ],
+            }
+        ],
+    }
+    state_input = build_controller_state_input(
+        user_input="继续重试",
+        environment_payload=copy.deepcopy(environment_payload),
+        workspace_root=REPO_ROOT,
+        compress=True,
+        compress_target_tokens=80,
+    )
+    payload_text = str(state_input["ENVIRONMENT_JSON"]["tasks"][0]["task"]["result"])
+    assert "[COMPACTED_VIEW]" in payload_text

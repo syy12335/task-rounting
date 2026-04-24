@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from ..reward_specs import CONTROLLER_REWARD_SPEC_ID, GRAPH_EVAL_SPEC_ID
-from ..runtime_adapter import ASSETS_ROOT, REPO_ROOT, build_controller_state_input, build_reply_state_input
+from ..runtime_adapter import (
+    ASSETS_ROOT,
+    REPO_ROOT,
+    build_controller_state_input,
+    build_reply_state_input,
+    normalize_controller_state_view,
+    validate_runtime_controller_action,
+)
 from ..types import EvalManifest, SftExample, TrainingRecord, VerifierSidecar
 from .io import read_jsonl, write_jsonl
 
@@ -264,9 +271,11 @@ def build_controller_train_records(
     *,
     teacher_source_dir: Path | None = None,
     workspace_root: Path | None = None,
+    controller_state_view: dict[str, Any] | None = None,
 ) -> tuple[list[TrainingRecord], dict[str, Any]]:
     resolved_dir = (teacher_source_dir or DEFAULT_SFT_TEACHER_SOURCE_DIR).resolve()
     runtime_root = (workspace_root or REPO_ROOT).resolve()
+    normalized_state_view = normalize_controller_state_view(controller_state_view)
     raw_manifest = _load_controller_teacher_manifest(resolved_dir)
     allowed_action_kinds = list(raw_manifest["action_space"])
 
@@ -302,6 +311,8 @@ def build_controller_train_records(
                 user_input=str(row.get("user_input", "")),
                 environment_payload=formal_environment,
                 workspace_root=runtime_root,
+                compress=bool(normalized_state_view["compress"]),
+                compress_target_tokens=normalized_state_view["compress_target_tokens"],
             )
             target_action = row.get("target_action", {})
             if not isinstance(target_action, dict):
@@ -319,7 +330,8 @@ def build_controller_train_records(
                     environment_extras=verifier_extras,
                 ),
                 metadata={
-                    "terminal": bool(row["terminal"]),
+                    "source_terminal": bool(row["terminal"]),
+                    "controller_state_view": copy.deepcopy(normalized_state_view),
                 },
             )
             records.append(record)
@@ -334,6 +346,7 @@ def build_controller_train_records(
         "counts_by_split": counts_by_split,
         "roles": [ROLE_CONTROLLER],
         "action_space": list(raw_manifest["action_space"]),
+        "controller_state_view": copy.deepcopy(normalized_state_view),
     }
     return records, manifest
 
@@ -408,11 +421,16 @@ def write_controller_sft_assets(
     example_eval_path = examples_dir / "controller_sft_eval.jsonl"
     manifest_path = output_root / "manifest.json"
 
+    controller_state_view = _extract_controller_state_view_from_records(records)
+    manifest_payload = copy.deepcopy(manifest)
+    if controller_state_view is not None:
+        manifest_payload["controller_state_view"] = controller_state_view
+
     write_jsonl(record_train_path, train_record_rows)
     write_jsonl(record_eval_path, eval_record_rows)
     write_jsonl(example_train_path, train_examples)
     write_jsonl(example_eval_path, eval_examples)
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {
         "record_train_path": record_train_path,
         "record_eval_path": record_eval_path,
@@ -525,6 +543,9 @@ def _validate_controller_teacher_row(
         raise ValueError(
             f"target_action.action_kind must be one of {allowed_action_kinds}: {sample_id}"
         )
+    valid, errors = validate_runtime_controller_action(target_action)
+    if not valid:
+        raise ValueError(f"target_action must satisfy runtime controller schema: {sample_id}: {errors[0]}")
 
 
 def _validate_teacher_manifest(
@@ -546,6 +567,22 @@ def _validate_teacher_manifest(
             f"teacher source manifest eval_size mismatch: expected {expected_eval}, "
             f"got {counts_by_split['eval']}"
         )
+
+
+def _extract_controller_state_view_from_records(records: list[TrainingRecord]) -> dict[str, Any] | None:
+    normalized_rows: list[dict[str, Any]] = []
+    for record in records:
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        payload = metadata.get("controller_state_view")
+        if not isinstance(payload, dict):
+            continue
+        normalized_rows.append(normalize_controller_state_view(payload))
+    if not normalized_rows:
+        return None
+    first = normalized_rows[0]
+    if any(item != first for item in normalized_rows[1:]):
+        raise ValueError("controller_state_view must be consistent across controller records")
+    return first
 
 
 def _build_expected_final_task(bundle: dict[str, Any]) -> dict[str, Any]:

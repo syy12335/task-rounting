@@ -84,6 +84,10 @@ data:
   return_raw_chat: true
   filter_overlong_prompts: false
 
+controller_state_view:
+  compress: false
+  compress_target_tokens: null
+
 feedback:
   auto_sft_confidence_threshold: 0.85
   regression_reserve_ratio: 0.2

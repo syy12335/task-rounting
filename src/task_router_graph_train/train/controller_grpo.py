@@ -21,7 +21,13 @@ from ..artifacts import (
 )
 from ..dataset import build_controller_train_records, render_controller_prompt, render_controller_target_text, write_jsonl
 from ..dataset.io import read_jsonl
-from ..runtime_adapter import CONFIGS_ROOT, REPO_ROOT
+from ..runtime_adapter import (
+    CONFIGS_ROOT,
+    REPO_ROOT,
+    normalize_controller_state_view,
+    resolve_controller_state_view_from_config,
+    validate_runtime_controller_action,
+)
 from ..types import TrainingRecord, VerifierSidecar
 from .controller_grpo_teacher import (
     DEFAULT_TEACHER_DATA_SOURCE,
@@ -33,31 +39,11 @@ from .controller_grpo_teacher import (
 
 ALLOWED_ACTION_KINDS = {"observe", "generate_task"}
 DEFAULT_GRPO_CONFIG_PATH = CONFIGS_ROOT / "controller_grpo_online.yaml"
+DEFAULT_CONTROLLER_STATE_VIEW = normalize_controller_state_view()
 
 
 def validate_controller_action(action: dict[str, Any]) -> tuple[bool, list[str]]:
-    errors: list[str] = []
-    action_kind = str(action.get("action_kind", "")).strip()
-    if action_kind not in ALLOWED_ACTION_KINDS:
-        errors.append(f"action_kind must be one of {sorted(ALLOWED_ACTION_KINDS)}")
-        return False, errors
-
-    if action_kind == "observe":
-        tool = action.get("tool")
-        args = action.get("args")
-        if not isinstance(tool, str) or not tool.strip():
-            errors.append("observe action must provide non-empty tool")
-        if not isinstance(args, dict):
-            errors.append("observe action must provide args object")
-    elif action_kind == "generate_task":
-        task_type = action.get("task_type")
-        task_content = action.get("task_content")
-        if not isinstance(task_type, str) or not task_type.strip():
-            errors.append("generate_task action must provide non-empty task_type")
-        if not isinstance(task_content, str) or not task_content.strip():
-            errors.append("generate_task action must provide non-empty task_content")
-
-    return len(errors) == 0, errors
+    return validate_runtime_controller_action(action)
 
 
 def build_grpo_rollout_groups(
@@ -250,6 +236,7 @@ def train_controller_grpo(
         seed=seed,
     )
     teacher_config = resolve_teacher_config(effective_config, role="reward_judge")
+    requested_controller_state_view = resolve_controller_state_view_from_config(effective_config)
 
     if str(teacher_config.get("mode", "")).strip().lower() != "online":
         raise ValueError("default training path only supports teacher.mode=online; use debug helpers for oracle/file")
@@ -270,10 +257,17 @@ def train_controller_grpo(
         allow_unsafe_path_input=allow_unsafe_path_input,
         teacher_source_dir=teacher_source_dir,
         repo_root=repo_root,
+        controller_state_view=requested_controller_state_view,
     )
     manifest = copy.deepcopy(input_resolution["record_manifest"])
     manifest_for_report = _sanitize_manifest_paths_for_report(manifest)
     controller_records = list(input_resolution["controller_records"])
+    resolved_input_controller_state_view, legacy_controller_state_view = _validate_requested_controller_state_view(
+        requested=requested_controller_state_view,
+        actual=input_resolution.get("controller_state_view"),
+        dataset_mode=str(input_resolution["dataset_mode"]),
+        unsafe_path_input=bool(input_resolution.get("unsafe_path_input", False)),
+    )
 
     if input_resolution["dataset_mode"] == VERL_RL_DATASET_ARTIFACT_TYPE:
         dataset_paths = {
@@ -302,6 +296,7 @@ def train_controller_grpo(
         "teacher": copy.deepcopy(effective_config["teacher"]),
         "rollout": copy.deepcopy(effective_config["rollout"]),
         "update": copy.deepcopy(effective_config["update"]),
+        "controller_state_view": copy.deepcopy(requested_controller_state_view),
         "debug": copy.deepcopy(effective_config.get("debug", {})),
         "audit": copy.deepcopy(effective_config.get("audit", {})),
     }
@@ -349,6 +344,7 @@ def train_controller_grpo(
         "rollout_backend": str(effective_config["rollout"]["backend"]),
         "teacher_backend": str(teacher_config["mode"]),
         "update_backend": str(effective_config["update"]["backend"]),
+        "controller_state_view": copy.deepcopy(requested_controller_state_view),
         "hydra_overrides": list(overrides_for_report),
     }
     request_path = output_dir / "verl_training_request.json"
@@ -381,6 +377,9 @@ def train_controller_grpo(
         "unsafe_path_input": bool(input_resolution.get("unsafe_path_input", False)),
         "num_candidates": int(effective_config["rollout"]["num_candidates"]),
         "seed": int(effective_config.get("seed", seed)),
+        "controller_state_view": copy.deepcopy(requested_controller_state_view),
+        "input_controller_state_view": copy.deepcopy(resolved_input_controller_state_view),
+        "input_controller_state_view_legacy": bool(legacy_controller_state_view),
         "compatibility_warnings": compatibility_warnings,
         "audit_paths": audit_paths,
         "hydra_overrides": list(overrides_for_report),
@@ -525,6 +524,7 @@ def _resolve_grpo_input_artifacts(
     allow_unsafe_path_input: bool,
     teacher_source_dir: Path | None,
     repo_root: Path,
+    controller_state_view: dict[str, Any],
 ) -> dict[str, Any]:
     if asset_manifest is not None or run_dir is not None:
         manifest = load_completed_manifest(asset_manifest=asset_manifest, run_dir=run_dir)
@@ -540,19 +540,27 @@ def _resolve_grpo_input_artifacts(
                 train_path=Path(str(asset["train_path"])).resolve(),
                 eval_path=Path(str(asset["eval_path"])).resolve(),
             )
+            manifest_state_view = _normalize_optional_controller_state_view(asset.get("controller_state_view"))
+            record_state_view = _extract_controller_state_view_from_training_records(controller_records)
             return {
                 "dataset_mode": CONTROLLER_TRAINING_RECORDS_ARTIFACT_TYPE,
                 "controller_records": controller_records,
                 "record_manifest": manifest,
                 "input_manifest_path": input_manifest_path,
                 "unsafe_path_input": False,
+                "controller_state_view": _resolve_asset_controller_state_view(
+                    manifest_state_view=manifest_state_view,
+                    row_state_view=record_state_view,
+                    dataset_mode=CONTROLLER_TRAINING_RECORDS_ARTIFACT_TYPE,
+                ),
             }
         asset = resolve_named_asset(
             manifest=manifest,
             asset_name="verl_rl_dataset_v1",
             expected_artifact_type=VERL_RL_DATASET_ARTIFACT_TYPE,
         )
-        _validate_verl_rl_dataset_rows(
+        manifest_state_view = _normalize_optional_controller_state_view(asset.get("controller_state_view"))
+        dataset_state_view = _validate_verl_rl_dataset_rows(
             train_path=Path(str(asset["train_path"])).resolve(),
             eval_path=Path(str(asset["eval_path"])).resolve(),
         )
@@ -564,6 +572,11 @@ def _resolve_grpo_input_artifacts(
             "record_manifest": manifest,
             "input_manifest_path": input_manifest_path,
             "unsafe_path_input": False,
+            "controller_state_view": _resolve_asset_controller_state_view(
+                manifest_state_view=manifest_state_view,
+                row_state_view=dataset_state_view,
+                dataset_mode=VERL_RL_DATASET_ARTIFACT_TYPE,
+            ),
         }
 
     if train_records is not None or eval_records is not None:
@@ -586,11 +599,13 @@ def _resolve_grpo_input_artifacts(
             },
             "input_manifest_path": "",
             "unsafe_path_input": True,
+            "controller_state_view": _extract_controller_state_view_from_training_records(controller_records),
         }
 
     records, manifest = build_controller_train_records(
         teacher_source_dir=teacher_source_dir,
         workspace_root=repo_root,
+        controller_state_view=controller_state_view,
     )
     controller_records = [record for record in records if record.role == "controller"]
     return {
@@ -599,6 +614,7 @@ def _resolve_grpo_input_artifacts(
         "record_manifest": manifest,
         "input_manifest_path": "",
         "unsafe_path_input": False,
+        "controller_state_view": _extract_controller_state_view_from_training_records(controller_records),
     }
 
 
@@ -654,7 +670,8 @@ def _coerce_verifier_sidecar(payload: Any) -> VerifierSidecar:
     )
 
 
-def _validate_verl_rl_dataset_rows(*, train_path: Path, eval_path: Path) -> None:
+def _validate_verl_rl_dataset_rows(*, train_path: Path, eval_path: Path) -> dict[str, Any] | None:
+    normalized_views: list[dict[str, Any]] = []
     for split, path in (("train", train_path), ("eval", eval_path)):
         for row in read_jsonl(path):
             prompt = row.get("prompt")
@@ -667,6 +684,17 @@ def _validate_verl_rl_dataset_rows(*, train_path: Path, eval_path: Path) -> None
                 raise ValueError(f"{path} extra_info.split must be {split}")
             if str(extra_info.get("sample_id", "")).strip() == "":
                 raise ValueError(f"{path} extra_info.sample_id is required")
+            controller_state_view = extra_info.get("controller_state_view")
+            if controller_state_view is not None:
+                if not isinstance(controller_state_view, dict):
+                    raise ValueError(f"{path} extra_info.controller_state_view must be object when provided")
+                normalized_views.append(normalize_controller_state_view(controller_state_view))
+    if not normalized_views:
+        return None
+    first = normalized_views[0]
+    if any(item != first for item in normalized_views[1:]):
+        raise ValueError("verl_rl_dataset_v1 controller_state_view must be consistent across all rows")
+    return first
 
 
 def _count_rl_dataset_rows(*, train_path: Path, eval_path: Path) -> dict[str, int]:
@@ -688,6 +716,7 @@ def _write_verl_rl_dataset(
     counts_by_split = {"train": 0, "eval": 0}
 
     for index, record in enumerate(records, start=1):
+        controller_state_view = _extract_controller_state_view_from_record(record)
         prompt_text = render_controller_prompt(record.state_input)
         prompt_messages = [{"role": "user", "content": prompt_text}]
         group_id = _build_group_id(index=index, sample_id=record.sample_id)
@@ -706,6 +735,7 @@ def _write_verl_rl_dataset(
                 "prompt_messages": copy.deepcopy(prompt_messages),
                 "num_candidates": num_candidates,
                 "teacher_context": copy.deepcopy(teacher_context),
+                "controller_state_view": copy.deepcopy(controller_state_view),
                 "metadata": copy.deepcopy(record.metadata),
                 "gold_output": copy.deepcopy(record.gold_output),
             },
@@ -1018,26 +1048,20 @@ def _mutate_action(action: dict[str, Any], *, rng: random.Random) -> dict[str, A
             {
                 "action_kind": "generate_task",
                 "reason": "忽略 running 语义直接起新任务。",
-                "tool": None,
-                "args": {},
                 "task_type": "functest",
                 "task_content": "重复执行功能测试",
             },
             {
                 "action_kind": "observe",
                 "reason": "继续观察，但未明确推进条件。",
-                "tool": "read",
-                "args": {"target": "latest_round"},
-                "task_type": None,
-                "task_content": None,
+                "tool": "build_context_view",
+                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
             },
             {
                 "action_kind": "observe",
                 "reason": "虚构状态：系统已经完成全部任务。",
-                "tool": "read",
-                "args": {"target": "latest_round"},
-                "task_type": None,
-                "task_content": None,
+                "tool": "build_context_view",
+                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
             },
         ]
         return copy.deepcopy(rng.choice(variants))
@@ -1046,10 +1070,8 @@ def _mutate_action(action: dict[str, Any], *, rng: random.Random) -> dict[str, A
             {
                 "action_kind": "observe",
                 "reason": "先读一下，但忽略了当前应新建任务。",
-                "tool": "read",
-                "args": {"target": "latest_round"},
-                "task_type": None,
-                "task_content": None,
+                "tool": "build_context_view",
+                "args": {"task_limit": 3, "include_trace": False, "include_user_input": False, "include_task": True, "include_reply": False},
             },
             {
                 "action_kind": "generate_task",
@@ -1072,3 +1094,76 @@ def _mutate_action(action: dict[str, Any], *, rng: random.Random) -> dict[str, A
     mutated["reason"] = "action_kind 非法，作为坏候选示例。"
     mutated["action_kind"] = "invalid_kind"
     return mutated
+
+
+def _normalize_optional_controller_state_view(payload: Any) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("controller_state_view must be a mapping when provided")
+    return normalize_controller_state_view(payload)
+
+
+def _extract_controller_state_view_from_record(record: TrainingRecord) -> dict[str, Any]:
+    metadata = record.metadata if isinstance(record.metadata, dict) else {}
+    payload = metadata.get("controller_state_view")
+    if isinstance(payload, dict):
+        return normalize_controller_state_view(payload)
+    return copy.deepcopy(DEFAULT_CONTROLLER_STATE_VIEW)
+
+
+def _extract_controller_state_view_from_training_records(records: list[TrainingRecord]) -> dict[str, Any] | None:
+    normalized_rows: list[dict[str, Any]] = []
+    for record in records:
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        payload = metadata.get("controller_state_view")
+        if payload is None:
+            continue
+        if not isinstance(payload, dict):
+            raise ValueError(f"controller record metadata.controller_state_view must be object: {record.sample_id}")
+        normalized_rows.append(normalize_controller_state_view(payload))
+    if not normalized_rows:
+        return None
+    first = normalized_rows[0]
+    if any(item != first for item in normalized_rows[1:]):
+        raise ValueError("controller training records contain inconsistent controller_state_view metadata")
+    return first
+
+
+def _resolve_asset_controller_state_view(
+    *,
+    manifest_state_view: dict[str, Any] | None,
+    row_state_view: dict[str, Any] | None,
+    dataset_mode: str,
+) -> dict[str, Any] | None:
+    if manifest_state_view is not None and row_state_view is not None and manifest_state_view != row_state_view:
+        raise ValueError(
+            f"{dataset_mode} controller_state_view mismatch between manifest asset metadata and row payload"
+        )
+    return copy.deepcopy(row_state_view or manifest_state_view)
+
+
+def _validate_requested_controller_state_view(
+    *,
+    requested: dict[str, Any],
+    actual: dict[str, Any] | None,
+    dataset_mode: str,
+    unsafe_path_input: bool,
+) -> tuple[dict[str, Any], bool]:
+    requested_view = normalize_controller_state_view(requested)
+    actual_view = _normalize_optional_controller_state_view(actual)
+    if actual_view is None:
+        if requested_view != DEFAULT_CONTROLLER_STATE_VIEW:
+            input_label = "unsafe input files" if unsafe_path_input else dataset_mode
+            raise ValueError(
+                "controller_state_view mismatch: input asset is legacy and does not record controller_state_view, "
+                f"but current training requested {requested_view}. Rebuild {input_label} with the requested view first."
+            )
+        return copy.deepcopy(DEFAULT_CONTROLLER_STATE_VIEW), True
+    if actual_view != requested_view:
+        input_label = "unsafe input files" if unsafe_path_input else dataset_mode
+        raise ValueError(
+            "controller_state_view mismatch between input asset and current training request: "
+            f"asset={actual_view}, requested={requested_view}. Rebuild {input_label} with matching controller_state_view."
+        )
+    return actual_view, False
