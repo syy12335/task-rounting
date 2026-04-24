@@ -80,7 +80,7 @@ class ControllerAgent:
                     {
                         "step": step,
                         "observations": observations,
-                        "output_constraints": _OUTPUT_CONSTRAINTS,
+                        "output_constraints": CONTROLLER_OUTPUT_CONSTRAINTS,
                     },
                     ensure_ascii=False,
                     indent=2,
