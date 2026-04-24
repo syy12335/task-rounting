@@ -2,143 +2,34 @@
 
 ## Scope
 
-这份文档只定义 `controller` 的 `GRPO` 打分协议。
-
-这里只讨论：
-
-- controller 的输入输出协议
-- environment 可见性边界
-- `GRPO` reward 的 hard gate
-- `RM-first` 的 teacher 判分口径
-- `GRPO` dataset 不携带 reference/gold 的约束
-
-这里不讨论：
-
-- `SFT` 标签设计
-- `reference_action`
-- exact-match branch scoring
+这份文档只定义 controller 的 `GRPO` reward 协议。
 
 ## Core Position
 
-`GRPO` 主路径不保留也不依赖任何 reference。
+- `GRPO` 主路径不保留 reference
+- 最终 reward 完全基于 teacher ranking
+- teacher ranking 固定看三个维度：
+  - `environment = 0.5`
+  - `action = 0.3`
+  - `args = 0.2`
 
-具体约束：
+## Controller State
 
-- reward manager 不读取 `reference_action`
-- `verl` RL dataset 不写入 `gold_output`
-- `GRPO` debug rollout 不再使用 gold-mutate 预览
-- 最终 reward 来自：
-  - hard gates
-  - environment grounding
-  - `reward_judge` 对同一 state 下多个 candidate 的相对排序
-
-## Controller Input Protocol
-
-controller 在训练和评测里看到的输入固定来自：
+controller 的输入就是训练时真实可见的 state：
 
 ```text
-user_input + formal environment
-  -> build_controller_state_input(...)
-  -> {
-       "USER_INPUT": ...,
-       "ENVIRONMENT_JSON": ...,
-       "SKILLS_INDEX": ...
-     }
+USER_INPUT + ENVIRONMENT_JSON + SKILLS_INDEX
 ```
 
-reward 的一切判断都必须服从这个边界：
+当前只记三条边界：
 
-- 只能依据 `USER_INPUT`
-- 只能依据 `ENVIRONMENT_JSON`
-- 只能依据 `SKILLS_INDEX`
-- 不能使用 runtime hidden state
-- 不能使用 verifier sidecar
-- 不能事后补用模型不可见事实
+- `ENVIRONMENT_JSON` 是 `rounds` 视图，不是 runtime full state
+- `previous_failed_task` 只是失败摘要
+- 完整失败轨迹默认不可见；如果需要，必须显式 `observe(previous_failed_track, {})`
 
-## Environment Protocol
-
-当前 controller 可见的是 `rounds` 视图，不是 runtime full state。
-
-关键规则：
-
-- `ENVIRONMENT_JSON.rounds[*]` 是 round 级结构
-- `round` 级字段包括：
-  - `round_id`
-  - `user_input`
-  - `reply`
-  - `tasks`
-- `reply` 是 round 级字段，不是 task 级字段
-- `tasks[*]` 里只放 task 自身信息
-- `previous_failed_task` 是失败摘要补丁
-- 完整失败轨迹默认不可见
-- 如果需要完整失败轨迹，必须显式输出：
-  - `observe(previous_failed_track, {})`
-
-当前 reward 必须尊重下面这些 visibility rules：
-
-- 能从 `rounds`、`history_summary_latest`、`history_meta_summary`、`previous_failed_task` 直接看到的事实，允许用于判分
-- 只能从 `track` 才知道的细节，不允许拿来做硬判
-- 如果模型输出依赖隐藏事实，只能由 teacher 作为语义失真或 grounding 不足来判
-
-## Canonical Input Example
-
-```json
-{
-  "USER_INPUT": "根据上一轮失败结果继续处理",
-  "ENVIRONMENT_JSON": {
-    "cur_round": 2,
-    "rounds": [
-      {
-        "round_id": 1,
-        "user_input": "帮我做登录功能测试",
-        "reply": "",
-        "tasks": [
-          {
-            "task_id": 1,
-            "task": {
-              "task_id": 1,
-              "type": "functest",
-              "content": "用户目标：验证登录流程是否正常\n任务限制：覆盖主流程，不猜测未提供的外部事实",
-              "status": "failed",
-              "result": ""
-            }
-          }
-        ]
-      },
-      {
-        "round_id": 2,
-        "user_input": "根据上一轮失败结果继续处理",
-        "reply": "",
-        "tasks": []
-      }
-    ],
-    "history_summary_latest": [],
-    "history_meta_summary": "",
-    "previous_failed_task": {
-      "round_id": 1,
-      "task_id": 1,
-      "task": {
-        "task_id": 1,
-        "type": "functest",
-        "content": "用户目标：验证登录流程是否正常\n任务限制：覆盖主流程，不猜测未提供的外部事实",
-        "status": "failed",
-        "result": ""
-      },
-      "reply": "上一次执行失败，正在自动重试（1/3）。失败摘要：登录按钮点击后页面无响应。"
-    }
-  },
-  "SKILLS_INDEX": "..."
-}
-```
-
-## Controller Output Protocol
+## Controller Output
 
 controller 只允许输出一个 JSON object。
-
-`action_kind` 只允许：
-
-- `observe`
-- `generate_task`
 
 ### `observe`
 
@@ -154,7 +45,7 @@ controller 只允许输出一个 JSON object。
 - `task_type`
 - `task_content`
 
-合法工具：
+合法 `tool`：
 
 - `read`
 - `ls`
@@ -184,107 +75,37 @@ controller 只允许输出一个 JSON object。
 - `accutest`
 - `perftest`
 
-`task_content` 继续要求两段式：
+`task_content` 固定两段：
 
 ```text
 用户目标：...
 任务限制：...
 ```
 
-## Canonical Output Examples
-
-合法 `observe(build_context_view)`：
-
-```json
-{
-  "action_kind": "observe",
-  "tool": "build_context_view",
-  "args": {
-    "round_limit": 3,
-    "include_user_input": true,
-    "include_task": true,
-    "include_reply": true,
-    "include_trace": false
-  },
-  "reason": "先读取正式上下文视图，再决定下一步。"
-}
-```
-
-合法 `observe(previous_failed_track)`：
-
-```json
-{
-  "action_kind": "observe",
-  "tool": "previous_failed_track",
-  "args": {},
-  "reason": "当前只看到失败摘要，完整失败轨迹仍不可见，需要先补全轨迹。"
-}
-```
-
-合法 `generate_task(perftest)`：
-
-```json
-{
-  "action_kind": "generate_task",
-  "task_type": "perftest",
-  "task_content": "用户目标：对首页接口执行性能测试\n任务限制：重点关注 p95 延迟，不猜测未提供的外部事实",
-  "reason": "当前没有运行中的相关任务，且用户目标已足够明确，可直接生成性能测试任务。"
-}
-```
-
-## GRPO Dataset Contract
-
-`GRPO` 主路径的数据契约只保留训练必需字段。
-
-允许存在：
-
-- `prompt`
-- `uid`
-- `data_source`
-- `extra_info.group_id`
-- `extra_info.sample_id`
-- `extra_info.split`
-- `extra_info.state_input`
-- `extra_info.prompt_text`
-- `extra_info.prompt_messages`
-- `extra_info.num_candidates`
-- `extra_info.teacher_context`
-- `extra_info.controller_state_view`
-- `extra_info.metadata`
-
-明确不允许存在：
-
-- `reference_action`
-- `gold_output`
-- `target_action`
-- any hard-gold branch label
-
-原因很简单：
-
-- `GRPO` 不是 supervised exact-match
-- reward 只需要 state、candidate、teacher ranking
-- gold 留在 dataset 里只会污染 debug、评测和心智模型
-
 ## Reward Pipeline
 
-`GRPO` 主路径只保留五层：
+reward 分两步：
 
-1. `parse gate`
-2. `schema gate`
-3. `protocol gate`
-4. `environment grounding`
-5. `teacher ranking`
+1. hard gate
+2. teacher ranking
 
-不存在：
+### 1. Hard Gate
 
-- `reference_action gate`
-- exact-match reference branch scoring
+如果 candidate 在 `parse / schema / protocol` 任一层失败，则直接排最后，不进入后续 ranking。
 
-### 1. `parse gate`
+- `parse`
+  - 输出不能解析成单个 JSON object
+- `schema`
+  - 输出不是 runtime 合法的 controller action
+- `protocol`
+  - 输出虽然 schema 合法，但不符合当前 controller 输出约束
 
-模型输出必须能解析成一个 JSON object。
+这里不做：
 
-失败例子：
+- branch exact-match
+- reference 对照
+
+#### Demo: parse
 
 ```text
 我觉得应该先看看状态
@@ -292,14 +113,11 @@ controller 只允许输出一个 JSON object。
 
 结果：
 
-- `parse gate` 失败
-- 该 candidate 记为最低分候选
+- 不是 JSON object
+- `parse` 失败
+- 直接排最后
 
-### 2. `schema gate`
-
-解析成功后，必须满足 runtime controller action schema。
-
-失败例子：
+#### Demo: schema
 
 ```json
 {
@@ -312,160 +130,171 @@ controller 只允许输出一个 JSON object。
 
 - 缺少 `args`
 - 缺少 `reason`
-- `schema gate` 失败
+- `schema` 失败
+- 直接排最后
 
-### 3. `protocol gate`
-
-schema 通过后，还要满足当前 controller 自己的输出协议。
-
-失败例子：
+#### Demo: protocol
 
 ```json
 {
   "action_kind": "generate_task",
   "tool": "build_context_view",
   "task_type": "functest",
-  "task_content": "执行登录功能测试",
+  "task_content": "执行登录测试",
   "reason": "创建任务"
 }
 ```
 
 结果：
 
-- `generate_task` 不应混入 `tool`
-- `task_content` 也不符合两段式规范
-- `protocol gate` 失败
+- `generate_task` 混入 `tool`
+- `task_content` 不符合两段式
+- `protocol` 失败
+- 直接排最后
 
-### 4. `environment grounding`
+### 2. Teacher Ranking
 
-这里不再追求“全自动判最优动作”，只判能硬判的 grounding 子集。
+通过 hard gate 后，使用一个 teacher 同时评估同一组 candidates 的三个维度：
 
-hard subset 只做三类检查：
+- `environment`
+- `action`
+- `args`
 
-1. 隐藏事实泄漏
-2. 与显式可见事实直接冲突
-3. 应先补充可见事实却直接编造结论
+teacher 对每个 candidate 给出三维打分：
 
-#### pass example
+- `environment_raw_score`
+- `action_raw_score`
+- `args_raw_score`
+- `reason`
 
-当前只看到失败摘要，还没看到完整失败轨迹。
+取值范围固定为 `[0, 1]`。
 
-prediction:
+这些分数的目的不是直接充当最终 reward，而是先形成每个维度内的相对排序。
 
-```json
-{
-  "action_kind": "observe",
-  "tool": "previous_failed_track",
-  "args": {},
-  "reason": "当前只看到失败摘要，先补全失败轨迹。"
-}
+#### `environment`
+
+权重：
+
+- `environment = 0.5`
+
+只判断 candidate 是否 grounded in 当前可见 state。
+
+必须遵守：
+
+- 只能依据当前可见的 `USER_INPUT / ENVIRONMENT_JSON / SKILLS_INDEX`
+- 不允许使用 hidden facts
+- 不允许根据不可见 `track` 脑补细节
+- 不允许忽略已经显式可见的环境事实
+- 不允许和显式环境事实直接冲突
+
+重点检查：
+
+- `running`
+- `failed`
+- `history_summary_latest`
+- `history_meta_summary`
+- `previous_failed_task`
+
+排序原则：
+
+- 更好利用显式环境事实的 candidate 排前面
+- 编造 hidden facts 的 candidate 排后面
+- 和当前环境直接冲突的 candidate 明显降级
+- 当前信息不足时，保守补观察优先于臆造结论
+
+#### `action`
+
+权重：
+
+- `action = 0.3`
+
+只判断下一步动作方向是否正确。
+
+必须检查：
+
+- 当前更应该 `observe` 还是 `generate_task`
+- 如果是 `observe`，`tool` 是否合适
+- 如果是 `generate_task`，`task_type` 是否合适
+
+排序原则：
+
+- 动作大方向更正确的 candidate 排前面
+- 同为 `observe` 时，tool 更贴合当前状态的 candidate 排前面
+- 同为 `generate_task` 时，task_type 更贴合当前目标和状态的 candidate 排前面
+- 明显重复 observe、重复派发、或忽略当前已在运行任务的 candidate 降级
+
+#### `args`
+
+权重：
+
+- `args = 0.2`
+
+只判断动作内部内容质量。
+
+必须检查：
+
+- `observe.args` 是否最小且充分
+- `build_context_view` 参数是否有明确目的
+- `previous_failed_track` 是否保持空参数对象
+- `generate_task.task_content` 是否具体、可执行、与当前 state 对齐
+- `generate_task.task_content` 是否编造了环境里没有的细节
+- `task_content` 是否保持两段式
+
+排序原则：
+
+- 参数更准确、更克制、更有执行价值的 candidate 排前面
+- `task_content` 更具体、更可执行、更贴合用户目标的 candidate 排前面
+- 空泛、冗余、跑题、或夹带隐含事实的 candidate 排后面
+
+`reason` 只用于解释打分依据，不单独计分。
+
+## Final Score
+
+先把每个维度的原始分排序，得到对应的 `rank_score`。
+
+对长度为 `N` 的 candidate 列表，定义：
+
+```text
+rank_score = (N - rank_index - 1) / (N - 1)
 ```
 
-结果：
+固定：
 
-- 没有使用隐藏事实
-- 动作和当前可见环境一致
-- `environment grounding` 通过
+- `alpha = 0.9`
+- `environment_weight = 0.5`
+- `action_weight = 0.3`
+- `args_weight = 0.2`
 
-#### fail example: hidden fact leak
+并按下面的方式混合“排序分”和“原始分”：
 
-当前 `ENVIRONMENT_JSON` 里只有失败摘要，没有暴露完整 `track`。
+```text
+environment_score =
+  alpha * environment_rank_score +
+  (1 - alpha) * environment_raw_score
 
-prediction:
+action_score =
+  alpha * action_rank_score +
+  (1 - alpha) * action_raw_score
 
-```json
-{
-  "action_kind": "generate_task",
-  "task_type": "functest",
-  "task_content": "用户目标：修复登录按钮点击无响应问题\n任务限制：重点检查点击事件绑定丢失，不猜测未提供的外部事实",
-  "reason": "失败原因已经明确是点击事件绑定丢失。"
-}
+args_score =
+  alpha * args_rank_score +
+  (1 - alpha) * args_raw_score
 ```
 
-结果：
+最终总分固定为：
 
-- `点击事件绑定丢失` 属于当前 state 不可见细节
-- 这是 hidden fact leak
-- `environment grounding` 失败
-
-#### fail example: visible contradiction
-
-当前 `ENVIRONMENT_JSON` 已明确存在相关 `running` 任务。
-
-prediction:
-
-```json
-{
-  "action_kind": "generate_task",
-  "task_type": "functest",
-  "task_content": "用户目标：重新发起登录功能测试\n任务限制：立即重新执行，不等待当前任务状态",
-  "reason": "直接重建一个同类任务。"
-}
+```text
+final_score =
+  0.5 * environment_score +
+  0.3 * action_score +
+  0.2 * args_score
 ```
 
-结果：
+也就是说：
 
-- 与显式可见的 `running` 事实直接冲突
-- `environment grounding` 失败
+- teacher 会打分
+- 但打分的主要目的，是形成稳定排序
+- 原始分只作为排序之外的弱修正
+- 因为打分主观性更强，所以 `alpha` 固定取 `0.9`
 
-### 5. `teacher ranking`
-
-通过 hard gates 后，不再做 exact-match，而是交给 `reward_judge` 对同一 state 下多个 candidate 做相对排序。
-
-teacher 需要重点判断：
-
-- 哪个 candidate 更 grounded
-- 哪个 candidate 更能推进当前 controller 决策
-- 哪个 candidate 更少重复 observe / 重复派发 / 忽略 running 或 failed 事实
-- 哪个 candidate 在当前 state 下更保守、更合理
-
-teacher 不需要做的事：
-
-- 生成 hard-gold
-- 对照 `reference_action`
-- 做 exact string match
-
-## Final Reward
-
-实现上最终仍然回到单个 scalar reward。
-
-推荐口径：
-
-- `parse/schema/protocol/environment` 任一失败：
-  - 该 candidate 进入最低档
-- 全部通过：
-  - 由 `reward_judge` 给出 group ranking / scores
-
-换句话说：
-
-- hard gates 负责淘汰协议错误候选
-- teacher 负责在合法候选中做相对优劣判断
-
-## Output Metrics
-
-主指标建议只保留：
-
-- `reward_mean`
-- `parse_valid_rate`
-- `schema_valid_rate`
-- `protocol_valid_rate`
-- `environment_grounded_rate`
-
-如果要看 teacher 行为，可以补：
-
-- `teacher_confidence_mean`
-- `teacher_top1_margin_mean`
-
-但不要再回到：
-
-- `reference_action_match_rate`
-- `observe_exact_match_rate`
-- `generate_task_exact_match_rate`
-
-## Bottom Line
-
-这版协议的核心只有三句：
-
-- `GRPO` 主路径不保留 reference
-- dataset 不携带 `gold_output`
-- reward 用 hard gates 过滤协议错误，再交给 `reward_judge` 做相对排序
+group 内按 `final_score` 从高到低排序。
