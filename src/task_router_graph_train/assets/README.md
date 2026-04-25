@@ -1,16 +1,13 @@
-# Task Router Train Assets
+# Assets
 
-本目录存放训练模块自己的资产。
-
-当前主线只看两类目录：
+当前正式资产仅包含：
 
 - `manual_protocol_v1/`
-  - 当前 frozen base 真源
-- `eval_samples/manual_eval/`
-  - 固定离线评测样本
+  - 冻结基础真源（sft_train/sft_eval/holdout）
+- `post_training/rounds/<round_id>/`
+  - `round_manifest.json`
+  - `teacher_queue.jsonl`
+  - `sft_admissions.jsonl`
+  - 以及该轮派生的 `sft_examples_*`、`controller_records_*`、`holdout_records.jsonl`
 
-其余目录如果仍然存在，只视为历史或兼容资产，不作为当前文档主线入口。
-
-详细契约见：
-
-- `src/task_router_graph_train/docs/data_contract.md`
+其余历史资产目录已从主线移除。
