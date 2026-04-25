@@ -14,6 +14,10 @@ from ..runtime_adapter import validate_runtime_controller_action
 ALLOWED_ACTION_KINDS = {"observe", "generate_task"}
 DEFAULT_TEACHER_DATA_SOURCE = "task_router_graph_train/controller_grpo_online"
 DEFAULT_TEACHER_ROLE = "reward_judge"
+RANK_MIX_ALPHA = 0.9
+ENVIRONMENT_WEIGHT = 0.5
+ACTION_WEIGHT = 0.3
+ARGS_WEIGHT = 0.2
 
 _RUBRICS: dict[str, dict[str, Any]] = {
     "controller_grpo_pairwise_v1": {
@@ -32,6 +36,15 @@ _RUBRICS: dict[str, dict[str, Any]] = {
             "必须严格基于当前 formal state 和 bad case 描述，不允许使用外部事实。",
             "如果 bad case 显示模型重复 observe 或忽略环境事实，reference_action 应显式修正该错误。",
             "动作必须满足当前 controller action schema。",
+        ],
+    },
+    "controller_sft_admission_v1": {
+        "title": "Controller badcase admission and reference generation",
+        "criteria": [
+            "先判断 badcase 是否值得接纳进下一轮 SFT。",
+            "只有 admission=true 时才输出 reference_action。",
+            "reference_action 必须严格基于当前可见 state，不允许使用 hidden facts 或 verifier sidecar。",
+            "reference_action 必须满足 schema 和 protocol 约束。",
         ],
     },
     "controller_regression_judge_v1": {
@@ -82,6 +95,7 @@ def resolve_teacher_config(config: dict[str, Any], role: str = DEFAULT_TEACHER_R
     default_rubric = {
         "reward_judge": "controller_grpo_pairwise_v1",
         "reference_generator": "controller_reference_generator_v1",
+        "admission_judge": "controller_sft_admission_v1",
         "regression_judge": "controller_regression_judge_v1",
     }.get(role, "controller_grpo_pairwise_v1")
     teacher["rubric_id"] = str(teacher.get("rubric_id", default_rubric)).strip()
@@ -127,12 +141,68 @@ def parse_candidate_action(raw_text: str) -> tuple[dict[str, Any] | None, list[s
         payload = parse_json_object(text)
     except ValueError as exc:
         return None, [str(exc)]
-    valid, errors = validate_action_dict(payload)
-    return payload, ([] if valid else errors)
+    return payload, []
 
 
 def validate_action_dict(action: dict[str, Any]) -> tuple[bool, list[str]]:
     return validate_runtime_controller_action(action)
+
+
+def validate_protocol_action(action: dict[str, Any]) -> tuple[bool, list[str]]:
+    if not isinstance(action, dict):
+        return False, ["action must be an object"]
+
+    action_kind = str(action.get("action_kind", "")).strip()
+    if action_kind == "observe":
+        tool = str(action.get("tool", "")).strip()
+        args = action.get("args", {})
+        if not isinstance(args, dict):
+            return False, ["observe.args must be an object"]
+        if tool in {"previous_failed_track", "beijing_time"} and args:
+            return False, [f"{tool} args must be empty object"]
+        if tool == "build_context_view":
+            if _coerce_truthy(args.get("include_trace", False)):
+                return False, ["build_context_view.include_trace must be false in controller protocol"]
+        return True, []
+
+    if action_kind == "generate_task":
+        task_content = str(action.get("task_content", "")).strip()
+        lines = [line.strip() for line in task_content.splitlines() if line.strip()]
+        if len(lines) != 2:
+            return False, ["generate_task.task_content must be exactly two non-empty lines"]
+        if not lines[0].startswith("用户目标："):
+            return False, ["generate_task.task_content line 1 must start with 用户目标："]
+        if not lines[1].startswith("任务限制："):
+            return False, ["generate_task.task_content line 2 must start with 任务限制："]
+        return True, []
+
+    return False, [f"unsupported action_kind for protocol validation: {action_kind or '<missing>'}"]
+
+
+def inspect_candidate_action(raw_text: str) -> dict[str, Any]:
+    parsed_action, parse_errors = parse_candidate_action(raw_text)
+    parse_ok = parsed_action is not None and not parse_errors
+    schema_ok = False
+    schema_errors: list[str] = []
+    protocol_ok = False
+    protocol_errors: list[str] = []
+    if parsed_action is not None:
+        schema_ok, schema_errors = validate_action_dict(parsed_action)
+        if schema_ok:
+            protocol_ok, protocol_errors = validate_protocol_action(parsed_action)
+    result = {
+        "action": copy.deepcopy(parsed_action),
+        "parse_ok": parse_ok,
+        "parse_errors": list(parse_errors),
+        "schema_ok": schema_ok,
+        "schema_errors": list(schema_errors),
+        "protocol_ok": protocol_ok,
+        "protocol_errors": list(protocol_errors),
+        "hard_gate_passed": bool(parse_ok and schema_ok and protocol_ok),
+    }
+    result["failure_stage"] = _resolve_failure_stage(result)
+    result["failure_reason"] = _resolve_failure_reason(result)
+    return result
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -170,49 +240,39 @@ def normalize_teacher_result(
     candidate_ids: list[str],
 ) -> dict[str, Any]:
     allowed = set(candidate_ids)
-    ranking = raw_result.get("ranking")
-    scores_by_candidate = raw_result.get("scores_by_candidate")
+    dimension_scores_by_candidate = raw_result.get("dimension_scores_by_candidate")
 
-    normalized_scores: dict[str, float] = {}
-    if isinstance(scores_by_candidate, dict):
-        for candidate_id, score in scores_by_candidate.items():
-            normalized_candidate_id = str(candidate_id).strip()
-            if normalized_candidate_id not in allowed:
-                raise ValueError(
-                    f"teacher scores contain unknown candidate id for {group_id}: {normalized_candidate_id}"
-                )
-            try:
-                normalized_scores[normalized_candidate_id] = float(score)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"teacher score must be numeric for {group_id}: {normalized_candidate_id}") from exc
-        if len(normalized_scores) != len(candidate_ids):
-            missing = sorted(allowed.difference(normalized_scores))
-            raise ValueError(f"teacher scores missing candidates for {group_id}: {missing}")
+    if not isinstance(dimension_scores_by_candidate, dict):
+        raise ValueError(f"teacher must return dimension_scores_by_candidate for {group_id}")
 
-    normalized_ranking: list[str]
-    if isinstance(ranking, list) and ranking:
-        normalized_ranking = [str(item).strip() for item in ranking]
-        if len(set(normalized_ranking)) != len(normalized_ranking):
-            raise ValueError(f"teacher ranking contains duplicates for {group_id}")
-        if set(normalized_ranking) != allowed:
-            raise ValueError(
-                f"teacher ranking mismatch for {group_id}: expected {sorted(candidate_ids)}, got {sorted(normalized_ranking)}"
-            )
-    elif normalized_scores:
-        normalized_ranking = sorted(
-            candidate_ids,
-            key=lambda candidate_id: (-normalized_scores[candidate_id], candidate_ids.index(candidate_id)),
-        )
-    else:
-        raise ValueError(f"teacher must return ranking or scores_by_candidate for {group_id}")
-
-    if not normalized_scores:
-        normalized_scores = ranking_to_rewards(normalized_ranking)
+    normalized_dimension_scores = _normalize_dimension_scores_by_candidate(
+        group_id=group_id,
+        raw_scores=dimension_scores_by_candidate,
+        candidate_ids=candidate_ids,
+    )
+    normalized_scores = _blend_dimension_scores(
+        group_id=group_id,
+        candidate_ids=candidate_ids,
+        dimension_scores=normalized_dimension_scores,
+    )
+    normalized_ranking = sorted(
+        candidate_ids,
+        key=lambda candidate_id: (-normalized_scores[candidate_id], candidate_ids.index(candidate_id)),
+    )
+    if set(normalized_ranking) != allowed:
+        raise ValueError(f"teacher ranking mismatch for {group_id}: expected {sorted(candidate_ids)}, got {sorted(normalized_ranking)}")
 
     return {
         "group_id": group_id,
         "ranking": normalized_ranking,
         "scores_by_candidate": normalized_scores,
+        "dimension_scores_by_candidate": normalized_dimension_scores,
+        "alpha": RANK_MIX_ALPHA,
+        "weights": {
+            "environment": ENVIRONMENT_WEIGHT,
+            "action": ACTION_WEIGHT,
+            "args": ARGS_WEIGHT,
+        },
         "confidence": float(raw_result.get("confidence", 1.0)),
         "reason": str(raw_result.get("reason", "")).strip(),
         "raw_result": copy.deepcopy(raw_result),
@@ -244,24 +304,55 @@ def judge_controller_group(
     if any(not candidate_id for candidate_id in candidate_ids):
         raise ValueError(f"candidate_id is required for every candidate in {group_id}")
 
+    hard_gate_results = _build_hard_gate_results(candidates)
+    passed_candidate_ids = [candidate_id for candidate_id in candidate_ids if hard_gate_results[candidate_id]["hard_gate_passed"]]
+
     if mode == "oracle":
-        return normalize_teacher_result(
+        dimension_scores = {
+            candidate_id: {
+                "environment_raw_score": ranking_to_rewards(passed_candidate_ids).get(candidate_id, 0.0),
+                "action_raw_score": ranking_to_rewards(passed_candidate_ids).get(candidate_id, 0.0),
+                "args_raw_score": ranking_to_rewards(passed_candidate_ids).get(candidate_id, 0.0),
+            }
+            for candidate_id in passed_candidate_ids
+        }
+        normalized = normalize_teacher_result(
             group_id=group_id,
             raw_result={
-                "ranking": candidate_ids,
+                "dimension_scores_by_candidate": dimension_scores,
                 "confidence": 1.0,
                 "reason": "oracle ranking preserves provided candidate order",
             },
+            candidate_ids=passed_candidate_ids,
+        )
+        return _merge_hard_gate_results(
+            group_id=group_id,
             candidate_ids=candidate_ids,
+            hard_gate_results=hard_gate_results,
+            teacher_result=normalized,
         )
     if mode == "file":
         ranking_rows = _load_rankings_from_file(Path(str(teacher_config["ranking_path"])))
         ranking_row = ranking_rows.get(group_id)
         if ranking_row is None:
             raise ValueError(f"missing teacher ranking for group in file mode: {group_id}")
-        return normalize_teacher_result(group_id=group_id, raw_result=ranking_row, candidate_ids=candidate_ids)
+        normalized = normalize_teacher_result(group_id=group_id, raw_result=ranking_row, candidate_ids=passed_candidate_ids)
+        return _merge_hard_gate_results(
+            group_id=group_id,
+            candidate_ids=candidate_ids,
+            hard_gate_results=hard_gate_results,
+            teacher_result=normalized,
+        )
     if mode != "online":
         raise ValueError(f"unsupported teacher mode: {mode}")
+
+    if not passed_candidate_ids:
+        return _merge_hard_gate_results(
+            group_id=group_id,
+            candidate_ids=candidate_ids,
+            hard_gate_results=hard_gate_results,
+            teacher_result=None,
+        )
 
     rubric = get_teacher_rubric(str(teacher_config.get("rubric_id", "")))
     payload = {
@@ -275,14 +366,19 @@ def judge_controller_group(
                 "candidate_id": str(candidate.get("candidate_id", "")).strip(),
                 "raw_text": str(candidate.get("raw_text", "")),
                 "action": copy.deepcopy(candidate.get("action")),
-                "is_valid": bool(candidate.get("is_valid", False)),
-                "validation_errors": list(candidate.get("validation_errors", [])),
+                "hard_gate": copy.deepcopy(hard_gate_results[str(candidate.get("candidate_id", "")).strip()]),
             }
             for candidate in candidates
+            if hard_gate_results[str(candidate.get("candidate_id", "")).strip()]["hard_gate_passed"]
         ],
         "output_schema": {
-            "ranking": ["cand_00", "cand_01"],
-            "scores_by_candidate": {"cand_00": 1.0, "cand_01": 0.0},
+            "dimension_scores_by_candidate": {
+                "cand_00": {
+                    "environment_raw_score": 1.0,
+                    "action_raw_score": 1.0,
+                    "args_raw_score": 1.0,
+                }
+            },
             "confidence": "0~1",
             "reason": "string",
         },
@@ -297,7 +393,13 @@ def judge_controller_group(
         system_prompt=_build_group_teacher_system_prompt(rubric),
         user_payload=payload,
     )
-    return normalize_teacher_result(group_id=group_id, raw_result=raw_result, candidate_ids=candidate_ids)
+    normalized = normalize_teacher_result(group_id=group_id, raw_result=raw_result, candidate_ids=passed_candidate_ids)
+    return _merge_hard_gate_results(
+        group_id=group_id,
+        candidate_ids=candidate_ids,
+        hard_gate_results=hard_gate_results,
+        teacher_result=normalized,
+    )
 
 
 def generate_reference_action(
@@ -449,6 +551,53 @@ def _normalize_regression_judge_result(
     }
 
 
+def review_badcase_for_sft(
+    *,
+    sample_id: str,
+    state_input: dict[str, Any],
+    policy_output: dict[str, Any],
+    source: str,
+    trigger_reason: str,
+    teacher_config: dict[str, Any],
+) -> dict[str, Any]:
+    mode = str(teacher_config.get("mode", "online")).strip().lower() or "online"
+    if mode != "online":
+        raise ValueError("admission_judge currently only supports teacher.mode=online")
+
+    rubric = get_teacher_rubric(str(teacher_config.get("rubric_id", "")))
+    payload = {
+        "task": "判断当前 badcase 是否接纳进下一轮 SFT，并在 admission=true 时输出 reference_action。",
+        "sample_id": sample_id,
+        "state_input": copy.deepcopy(state_input),
+        "policy_output": copy.deepcopy(policy_output),
+        "source": source,
+        "trigger_reason": trigger_reason,
+        "rubric": rubric,
+        "output_schema": {
+            "admission": True,
+            "reference_action": {
+                "action_kind": "observe",
+                "tool": "build_context_view",
+                "args": {},
+                "reason": "string",
+            },
+            "confidence": 1.0,
+            "reason": "string",
+        },
+    }
+    raw_result = _chat_json(
+        base_url=str(teacher_config["base_url"]),
+        api_key=str(teacher_config["api_key"]),
+        model=str(teacher_config["model"]),
+        timeout_sec=float(teacher_config["timeout_sec"]),
+        temperature=float(teacher_config.get("temperature", 0.0)),
+        max_tokens=int(teacher_config.get("max_tokens", 2048)),
+        system_prompt=_build_admission_judge_system_prompt(rubric),
+        user_payload=payload,
+    )
+    return _normalize_admission_judge_result(sample_id=sample_id, raw_result=raw_result)
+
+
 def _build_group_teacher_system_prompt(rubric: dict[str, Any]) -> str:
     title = str(rubric.get("title", "Controller next-action ranking")).strip()
     criteria = rubric.get("criteria", [])
@@ -466,7 +615,8 @@ def _build_group_teacher_system_prompt(rubric: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "返回时至少给出完整 ranking 或完整 scores_by_candidate；两者给其一即可。",
+            "只返回 dimension_scores_by_candidate、confidence、reason。",
+            "不要自己做最终排序分或 alpha 混合；这些由本地代码完成。",
         ]
     )
     return "\n".join(lines).strip()
@@ -490,6 +640,31 @@ def _build_reference_generator_system_prompt(rubric: dict[str, Any]) -> str:
         [
             "",
             "输出字段必须包含 reference_action、confidence、reason。",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _build_admission_judge_system_prompt(rubric: dict[str, Any]) -> str:
+    title = str(rubric.get("title", "Controller badcase admission and reference generation")).strip()
+    criteria = rubric.get("criteria", [])
+    lines = [
+        "你是 controller badcase 回流链路里的 admission judge。",
+        "你需要先判断样本是否接纳进下一轮 SFT。",
+        "只有 admission=true 时才输出 reference_action。",
+        "必须严格输出一个 JSON object，不要输出 markdown，不要输出额外解释。",
+        "",
+        f"Rubric: {title}",
+    ]
+    for item in criteria if isinstance(criteria, list) else []:
+        text = str(item).strip()
+        if text:
+            lines.append(f"- {text}")
+    lines.extend(
+        [
+            "",
+            "输出字段必须包含 admission、confidence、reason。",
+            "admission=false 时 reference_action 必须为 null 或省略。",
         ]
     )
     return "\n".join(lines).strip()
@@ -604,6 +779,182 @@ def _load_rankings_from_file(path: Path) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def _normalize_dimension_scores_by_candidate(
+    *,
+    group_id: str,
+    raw_scores: dict[str, Any],
+    candidate_ids: list[str],
+) -> dict[str, dict[str, float]]:
+    normalized: dict[str, dict[str, float]] = {}
+    required_keys = ("environment_raw_score", "action_raw_score", "args_raw_score")
+    for candidate_id in candidate_ids:
+        payload = raw_scores.get(candidate_id)
+        if not isinstance(payload, dict):
+            raise ValueError(f"teacher dimension scores missing candidate for {group_id}: {candidate_id}")
+        candidate_scores: dict[str, float] = {}
+        for key in required_keys:
+            try:
+                value = float(payload.get(key))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"teacher {key} must be numeric for {group_id}: {candidate_id}") from exc
+            if value < 0.0 or value > 1.0:
+                raise ValueError(f"teacher {key} must be within [0,1] for {group_id}: {candidate_id}")
+            candidate_scores[key] = value
+        normalized[candidate_id] = candidate_scores
+    return normalized
+
+
+def _blend_dimension_scores(
+    *,
+    group_id: str,
+    candidate_ids: list[str],
+    dimension_scores: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    if not candidate_ids:
+        return {}
+    axis_mapping = {
+        "environment": "environment_raw_score",
+        "action": "action_raw_score",
+        "args": "args_raw_score",
+    }
+    weights = {
+        "environment": ENVIRONMENT_WEIGHT,
+        "action": ACTION_WEIGHT,
+        "args": ARGS_WEIGHT,
+    }
+    final_scores = {candidate_id: 0.0 for candidate_id in candidate_ids}
+    for axis, raw_key in axis_mapping.items():
+        ordered = sorted(
+            candidate_ids,
+            key=lambda candidate_id: (-dimension_scores[candidate_id][raw_key], candidate_ids.index(candidate_id)),
+        )
+        rank_scores = ranking_to_rewards(ordered)
+        for candidate_id in candidate_ids:
+            raw_score = dimension_scores[candidate_id][raw_key]
+            mixed = (RANK_MIX_ALPHA * rank_scores.get(candidate_id, 0.0)) + ((1.0 - RANK_MIX_ALPHA) * raw_score)
+            final_scores[candidate_id] += weights[axis] * mixed
+    return {candidate_id: round(score, 6) for candidate_id, score in final_scores.items()}
+
+
+def _build_hard_gate_results(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        candidate_id = str(candidate.get("candidate_id", "")).strip()
+        if not candidate_id:
+            continue
+        raw_text = str(candidate.get("raw_text", ""))
+        inspected = inspect_candidate_action(raw_text)
+        if inspected["parse_ok"]:
+            action = inspected["action"]
+        else:
+            action = candidate.get("action")
+        results[candidate_id] = {
+            **inspected,
+            "candidate_id": candidate_id,
+            "action": copy.deepcopy(action) if isinstance(action, dict) else None,
+            "failure_stage": _resolve_failure_stage(inspected),
+            "failure_reason": _resolve_failure_reason(inspected),
+        }
+    return results
+
+
+def _resolve_failure_stage(inspected: dict[str, Any]) -> str:
+    if not inspected.get("parse_ok", False):
+        return "parse"
+    if not inspected.get("schema_ok", False):
+        return "schema"
+    if not inspected.get("protocol_ok", False):
+        return "protocol"
+    return ""
+
+
+def _resolve_failure_reason(inspected: dict[str, Any]) -> str:
+    stage = _resolve_failure_stage(inspected)
+    if stage == "parse":
+        return "; ".join(inspected.get("parse_errors", []))
+    if stage == "schema":
+        return "; ".join(inspected.get("schema_errors", []))
+    if stage == "protocol":
+        return "; ".join(inspected.get("protocol_errors", []))
+    return ""
+
+
+def _merge_hard_gate_results(
+    *,
+    group_id: str,
+    candidate_ids: list[str],
+    hard_gate_results: dict[str, dict[str, Any]],
+    teacher_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    passed_candidate_ids = [candidate_id for candidate_id in candidate_ids if hard_gate_results[candidate_id]["hard_gate_passed"]]
+    final_scores_by_candidate = {candidate_id: -1.0 for candidate_id in candidate_ids}
+    dimension_scores_by_candidate: dict[str, dict[str, float]] = {}
+    confidence = 1.0
+    reason = "all candidates failed hard gate"
+    if teacher_result is not None:
+        final_scores_by_candidate.update(teacher_result["scores_by_candidate"])
+        dimension_scores_by_candidate = copy.deepcopy(teacher_result["dimension_scores_by_candidate"])
+        confidence = float(teacher_result.get("confidence", 1.0))
+        reason = str(teacher_result.get("reason", "")).strip()
+
+    ordered_failed = [candidate_id for candidate_id in candidate_ids if not hard_gate_results[candidate_id]["hard_gate_passed"]]
+    ranking = sorted(
+        passed_candidate_ids,
+        key=lambda candidate_id: (-final_scores_by_candidate[candidate_id], candidate_ids.index(candidate_id)),
+    ) + ordered_failed
+
+    return {
+        "group_id": group_id,
+        "ranking": ranking,
+        "scores_by_candidate": final_scores_by_candidate,
+        "final_scores_by_candidate": final_scores_by_candidate,
+        "dimension_scores_by_candidate": dimension_scores_by_candidate,
+        "hard_gate_results": copy.deepcopy(hard_gate_results),
+        "alpha": RANK_MIX_ALPHA,
+        "weights": {
+            "environment": ENVIRONMENT_WEIGHT,
+            "action": ACTION_WEIGHT,
+            "args": ARGS_WEIGHT,
+        },
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
+def _normalize_admission_judge_result(*, sample_id: str, raw_result: dict[str, Any]) -> dict[str, Any]:
+    admission = raw_result.get("admission")
+    if not isinstance(admission, bool):
+        raise ValueError(f"admission_judge must return admission boolean for {sample_id}")
+    try:
+        confidence = float(raw_result.get("confidence", 1.0 if admission else 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"admission_judge confidence must be numeric for {sample_id}") from exc
+
+    reference_action = raw_result.get("reference_action")
+    validation_errors: list[str] = []
+    protocol_errors: list[str] = []
+    schema_valid = False
+    protocol_valid = False
+    if admission:
+        if not isinstance(reference_action, dict):
+            raise ValueError(f"admission_judge must return reference_action object when admission=true: {sample_id}")
+        schema_valid, validation_errors = validate_action_dict(reference_action)
+        if schema_valid:
+            protocol_valid, protocol_errors = validate_protocol_action(reference_action)
+    return {
+        "sample_id": sample_id,
+        "admission": admission,
+        "reference_action": copy.deepcopy(reference_action) if isinstance(reference_action, dict) else {},
+        "confidence": confidence,
+        "reason": str(raw_result.get("reason", "")).strip(),
+        "schema_valid": schema_valid,
+        "validation_errors": list(validation_errors),
+        "protocol_valid": protocol_valid,
+        "protocol_errors": list(protocol_errors),
+        "raw_result": copy.deepcopy(raw_result),
+    }
+
+
 def _extract_first_json_object(text: str) -> str | None:
     in_string = False
     escape = False
@@ -635,6 +986,20 @@ def _extract_first_json_object(text: str) -> str | None:
             if depth == 0:
                 return text[start : index + 1]
     return None
+
+
+def _coerce_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "no"}:
+            return False
+        if normalized in {"1", "true", "yes"}:
+            return True
+    return bool(value)
 
 
 def _is_local_base_url(base_url: str) -> bool:

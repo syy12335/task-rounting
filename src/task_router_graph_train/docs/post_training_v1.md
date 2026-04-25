@@ -96,10 +96,10 @@ candidate 在下面任一层失败，直接排最后：
 teacher 会给每个 candidate 输出：
 
 - 三维原始分
-- 排序
 - `reason`
+- `confidence`
 
-最终 reward 以排序为主，原始分只做弱修正：
+最终排序与 reward 在本地完成，原始分只做弱修正：
 
 - `alpha = 0.9`
 
@@ -116,6 +116,8 @@ badcase 的作用只有一个：
 
 - 进入 teacher 标注
 - 回流成下一轮 `SFT`
+
+固定 `holdout` 上失败的样本可以直接进入 `teacher_queue`。
 
 ### 3.1 badcase 门槛
 
@@ -194,6 +196,12 @@ teacher 规则：
 - 与 environment 一致
 
 teacher 未接纳的样本直接忽略。
+
+当前主链入口固定为：
+
+```text
+teacher_queue -> annotate_queue -> teacher_decisions -> sft_admissions
+```
 
 ### 3.4 回流
 

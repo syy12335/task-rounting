@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .controller_regression import evaluate_controller_regression
-from .evaluator import evaluate_prediction_records
+from .evaluator import build_holdout_badcase_candidates, evaluate_holdout_predictions
 
-__all__ = ["evaluate_controller_regression", "evaluate_prediction_records"]
+__all__ = ["build_holdout_badcase_candidates", "evaluate_holdout_predictions"]

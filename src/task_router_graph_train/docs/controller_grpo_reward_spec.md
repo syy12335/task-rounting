@@ -73,10 +73,11 @@ candidate 在以下任一层失败，则直接排最后，不进入后续 rankin
 - `protocol`
   - 输出虽然 schema 合法，但不符合当前 controller 输出约束
 
-hard gate 不做：
+hard gate 输出必须保留失败层级与原因：
 
-- branch exact-match
-- `reference_action` 对照
+- `parse`
+- `schema`
+- `protocol`
 
 ### 2. Teacher Ranking
 
@@ -86,16 +87,21 @@ hard gate 不做：
 - `action`
 - `args`
 
-teacher 对每个 candidate 给出：
+teacher 对每个 candidate 只给出三维 raw score：
 
 - `environment_raw_score`
 - `action_raw_score`
 - `args_raw_score`
+
+同时返回：
+
 - `reason`
+- `confidence`
 
 原始分范围固定为 `[0, 1]`。
 
-这些原始分的目的不是直接充当最终 reward，而是先形成每个维度内的相对排序。
+teacher 不负责输出最终排序分或最终 reward。
+本地代码会先在每个维度内做排序，再按固定权重与 `alpha=0.9` 混合。
 
 ## Ranking Rules
 
@@ -199,6 +205,7 @@ final_score =
 ```
 
 group 内按 `final_score` 从高到低排序。
+hard gate 失败项统一排在所有通过项之后。
 
 ## Status
 
