@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import inspect
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 from ..artifacts import to_safe_path
@@ -142,6 +145,7 @@ def _build_training_arguments(
     fp16: bool,
     gradient_checkpointing: bool,
     torch_empty_cache_steps: int | None,
+    ddp_find_unused_parameters: bool | None,
 ) -> Any:
     parameters = inspect.signature(TrainingArguments.__init__).parameters
     kwargs: dict[str, Any] = {
@@ -176,6 +180,8 @@ def _build_training_arguments(
         kwargs["eval_strategy"] = "epoch" if do_eval else "no"
     if "overwrite_output_dir" in parameters:
         kwargs["overwrite_output_dir"] = True
+    if ddp_find_unused_parameters is not None and "ddp_find_unused_parameters" in parameters:
+        kwargs["ddp_find_unused_parameters"] = bool(ddp_find_unused_parameters)
     return TrainingArguments(**kwargs)
 
 
@@ -202,6 +208,337 @@ def _resolve_sft_input_paths(
     return (Path(train_examples).resolve(), Path(eval_examples).resolve(), "")
 
 
+def _distributed_runtime_info() -> dict[str, int]:
+    return {
+        "rank": int(os.environ.get("RANK", "0")),
+        "local_rank": int(os.environ.get("LOCAL_RANK", "0")),
+        "world_size": int(os.environ.get("WORLD_SIZE", "1")),
+    }
+
+
+def _is_primary_process() -> bool:
+    return _distributed_runtime_info()["rank"] == 0
+
+
+def _is_distributed_process() -> bool:
+    return _distributed_runtime_info()["world_size"] > 1
+
+
+def _repo_root_from_train_module() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _should_launch_distributed_sft(
+    *,
+    nproc_per_node: int,
+    nnodes: int,
+    distributed_worker: bool,
+) -> bool:
+    if distributed_worker:
+        return False
+    if _is_distributed_process():
+        return False
+    return int(nproc_per_node) > 1 or int(nnodes) > 1
+
+
+def _build_sft_cli_args(
+    *,
+    model_name_or_path: str,
+    lora_target_modules: list[str],
+    train_examples: Path | None,
+    eval_examples: Path | None,
+    round_id: str | None,
+    round_manifest: Path | None,
+    allow_unsafe_path_input: bool,
+    output_dir: Path,
+    num_train_epochs: int,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    learning_rate: float,
+    max_seq_length: int,
+    lora_r: int,
+    lora_alpha: int,
+    lora_dropout: float,
+    seed: int,
+    bf16: bool,
+    fp16: bool,
+    gradient_checkpointing: bool,
+    torch_empty_cache_steps: int | None,
+    nproc_per_node: int,
+    nnodes: int,
+    node_rank: int,
+    master_addr: str,
+    master_port: int,
+    distributed_worker: bool,
+) -> list[str]:
+    args = [
+        "--model-name-or-path",
+        model_name_or_path,
+        "--lora-target-modules",
+        *list(lora_target_modules),
+        "--output-dir",
+        str(output_dir),
+        "--num-train-epochs",
+        str(num_train_epochs),
+        "--per-device-train-batch-size",
+        str(per_device_train_batch_size),
+        "--gradient-accumulation-steps",
+        str(gradient_accumulation_steps),
+        "--learning-rate",
+        str(learning_rate),
+        "--max-seq-length",
+        str(max_seq_length),
+        "--lora-r",
+        str(lora_r),
+        "--lora-alpha",
+        str(lora_alpha),
+        "--lora-dropout",
+        str(lora_dropout),
+        "--seed",
+        str(seed),
+        "--nproc-per-node",
+        str(nproc_per_node),
+        "--nnodes",
+        str(nnodes),
+        "--node-rank",
+        str(node_rank),
+        "--master-addr",
+        str(master_addr),
+        "--master-port",
+        str(master_port),
+    ]
+    if round_id is not None:
+        args.extend(["--round-id", str(round_id)])
+    if round_manifest is not None:
+        args.extend(["--round-manifest", str(Path(round_manifest).resolve())])
+    if train_examples is not None:
+        args.extend(["--train-examples", str(Path(train_examples).resolve())])
+    if eval_examples is not None:
+        args.extend(["--eval-examples", str(Path(eval_examples).resolve())])
+    if allow_unsafe_path_input:
+        args.append("--allow-unsafe-path-input")
+    if bf16:
+        args.append("--bf16")
+    if fp16:
+        args.append("--fp16")
+    if gradient_checkpointing:
+        args.append("--gradient-checkpointing")
+    if torch_empty_cache_steps is not None:
+        args.extend(["--torch-empty-cache-steps", str(torch_empty_cache_steps)])
+    if distributed_worker:
+        args.append("--distributed-worker")
+    return args
+
+
+def _build_distributed_launch_command(
+    *,
+    model_name_or_path: str,
+    lora_target_modules: list[str],
+    train_examples: Path | None,
+    eval_examples: Path | None,
+    round_id: str | None,
+    round_manifest: Path | None,
+    allow_unsafe_path_input: bool,
+    output_dir: Path,
+    num_train_epochs: int,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    learning_rate: float,
+    max_seq_length: int,
+    lora_r: int,
+    lora_alpha: int,
+    lora_dropout: float,
+    seed: int,
+    bf16: bool,
+    fp16: bool,
+    gradient_checkpointing: bool,
+    torch_empty_cache_steps: int | None,
+    nproc_per_node: int,
+    nnodes: int,
+    node_rank: int,
+    master_addr: str,
+    master_port: int,
+) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--nproc-per-node",
+        str(nproc_per_node),
+    ]
+    if int(nnodes) == 1 and int(node_rank) == 0:
+        command.append("--standalone")
+    else:
+        command.extend(
+            [
+                "--nnodes",
+                str(nnodes),
+                "--node-rank",
+                str(node_rank),
+                "--master-addr",
+                str(master_addr),
+                "--master-port",
+                str(master_port),
+            ]
+        )
+    command.extend(
+        [
+            "--module",
+            "task_router_graph_train.cli.train_sft",
+            *_build_sft_cli_args(
+                model_name_or_path=model_name_or_path,
+                lora_target_modules=lora_target_modules,
+                train_examples=train_examples,
+                eval_examples=eval_examples,
+                round_id=round_id,
+                round_manifest=round_manifest,
+                allow_unsafe_path_input=allow_unsafe_path_input,
+                output_dir=output_dir,
+                num_train_epochs=num_train_epochs,
+                per_device_train_batch_size=per_device_train_batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                learning_rate=learning_rate,
+                max_seq_length=max_seq_length,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                seed=seed,
+                bf16=bf16,
+                fp16=fp16,
+                gradient_checkpointing=gradient_checkpointing,
+                torch_empty_cache_steps=torch_empty_cache_steps,
+                nproc_per_node=nproc_per_node,
+                nnodes=nnodes,
+                node_rank=node_rank,
+                master_addr=master_addr,
+                master_port=master_port,
+                distributed_worker=True,
+            ),
+        ]
+    )
+    return command
+
+
+def _build_sft_report_from_artifacts(*, output_dir: Path) -> dict[str, Any]:
+    def _load_json(path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+
+    train_config = _load_json(output_dir / "train_config.json")
+    train_metrics = _load_json(output_dir / "train_metrics.json")
+    eval_metrics = _load_json(output_dir / "eval_metrics.json")
+    return {
+        "train_config": train_config,
+        "train_metrics": train_metrics,
+        "eval_metrics": eval_metrics,
+        "output_dir": to_safe_path(output_dir),
+    }
+
+
+def _run_distributed_sft(
+    *,
+    model_name_or_path: str,
+    lora_target_modules: list[str],
+    train_examples: Path | None,
+    eval_examples: Path | None,
+    round_id: str | None,
+    round_manifest: Path | None,
+    allow_unsafe_path_input: bool,
+    output_dir: Path,
+    num_train_epochs: int,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    learning_rate: float,
+    max_seq_length: int,
+    lora_r: int,
+    lora_alpha: int,
+    lora_dropout: float,
+    seed: int,
+    bf16: bool,
+    fp16: bool,
+    gradient_checkpointing: bool,
+    torch_empty_cache_steps: int | None,
+    nproc_per_node: int,
+    nnodes: int,
+    node_rank: int,
+    master_addr: str,
+    master_port: int,
+) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = _build_distributed_launch_command(
+        model_name_or_path=model_name_or_path,
+        lora_target_modules=lora_target_modules,
+        train_examples=train_examples,
+        eval_examples=eval_examples,
+        round_id=round_id,
+        round_manifest=round_manifest,
+        allow_unsafe_path_input=allow_unsafe_path_input,
+        output_dir=output_dir,
+        num_train_epochs=num_train_epochs,
+        per_device_train_batch_size=per_device_train_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=learning_rate,
+        max_seq_length=max_seq_length,
+        lora_r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        seed=seed,
+        bf16=bf16,
+        fp16=fp16,
+        gradient_checkpointing=gradient_checkpointing,
+        torch_empty_cache_steps=torch_empty_cache_steps,
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        node_rank=node_rank,
+        master_addr=master_addr,
+        master_port=master_port,
+    )
+    env = os.environ.copy()
+    src_root = str((_repo_root_from_train_module() / "src").resolve())
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src_root if not existing_pythonpath else src_root + os.pathsep + existing_pythonpath
+
+    stdout_log = output_dir / "distributed_stdout.log"
+    stderr_log = output_dir / "distributed_stderr.log"
+    proc = subprocess.run(
+        command,
+        cwd=_repo_root_from_train_module(),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    stdout_log.write_text(proc.stdout or "", encoding="utf-8")
+    stderr_log.write_text(proc.stderr or "", encoding="utf-8")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "controller SFT distributed launch failed with exit code "
+            f"{proc.returncode}. Check logs: {to_safe_path(stdout_log)} and {to_safe_path(stderr_log)}"
+        )
+
+    report = _build_sft_report_from_artifacts(output_dir=output_dir)
+    report["launcher"] = {
+        "mode": "torchrun",
+        "command": command,
+        "nproc_per_node": int(nproc_per_node),
+        "nnodes": int(nnodes),
+        "node_rank": int(node_rank),
+        "master_addr": str(master_addr),
+        "master_port": int(master_port),
+        "stdout_log": to_safe_path(stdout_log),
+        "stderr_log": to_safe_path(stderr_log),
+    }
+    return report
+
+
+def _unwrap_model(model: Any) -> Any:
+    current = model
+    while hasattr(current, "module"):
+        current = current.module
+    return current
+
+
 def train_controller_sft(
     *,
     model_name_or_path: str,
@@ -225,7 +562,58 @@ def train_controller_sft(
     fp16: bool = False,
     gradient_checkpointing: bool = False,
     torch_empty_cache_steps: int | None = None,
+    nproc_per_node: int = 1,
+    nnodes: int = 1,
+    node_rank: int = 0,
+    master_addr: str = "127.0.0.1",
+    master_port: int = 29500,
+    distributed_worker: bool = False,
 ) -> dict[str, Any]:
+    if int(nproc_per_node) <= 0:
+        raise ValueError("nproc_per_node must be positive")
+    if int(nnodes) <= 0:
+        raise ValueError("nnodes must be positive")
+    if int(node_rank) < 0:
+        raise ValueError("node_rank must be non-negative")
+    if int(node_rank) >= int(nnodes):
+        raise ValueError("node_rank must be smaller than nnodes")
+    if int(master_port) <= 0:
+        raise ValueError("master_port must be positive")
+
+    if _should_launch_distributed_sft(
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        distributed_worker=distributed_worker,
+    ):
+        return _run_distributed_sft(
+            model_name_or_path=model_name_or_path,
+            lora_target_modules=lora_target_modules,
+            train_examples=train_examples,
+            eval_examples=eval_examples,
+            round_id=round_id,
+            round_manifest=round_manifest,
+            allow_unsafe_path_input=allow_unsafe_path_input,
+            output_dir=output_dir,
+            num_train_epochs=num_train_epochs,
+            per_device_train_batch_size=per_device_train_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            learning_rate=learning_rate,
+            max_seq_length=max_seq_length,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            seed=seed,
+            bf16=bf16,
+            fp16=fp16,
+            gradient_checkpointing=gradient_checkpointing,
+            torch_empty_cache_steps=torch_empty_cache_steps,
+            nproc_per_node=nproc_per_node,
+            nnodes=nnodes,
+            node_rank=node_rank,
+            master_addr=master_addr,
+            master_port=master_port,
+        )
+
     dependencies = _require_training_dependencies()
     torch = dependencies["torch"]
     AutoModelForCausalLM = dependencies["AutoModelForCausalLM"]
@@ -308,6 +696,7 @@ def train_controller_sft(
         fp16=fp16,
         gradient_checkpointing=gradient_checkpointing,
         torch_empty_cache_steps=torch_empty_cache_steps,
+        ddp_find_unused_parameters=False if _is_distributed_process() else None,
     )
     trainer = Trainer(
         model=model,
@@ -338,24 +727,34 @@ def train_controller_sft(
         "fp16": bool(fp16),
         "gradient_checkpointing": bool(gradient_checkpointing),
         "torch_empty_cache_steps": torch_empty_cache_steps,
+        "nproc_per_node": int(nproc_per_node),
+        "nnodes": int(nnodes),
+        "node_rank": int(node_rank),
+        "master_addr": str(master_addr),
+        "master_port": int(master_port),
+        "distributed_worker": bool(distributed_worker),
+        "world_size": _distributed_runtime_info()["world_size"],
         "round_id": str(round_id or "latest"),
     }
-    (output_dir / "train_config.json").write_text(
-        json.dumps(train_config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    if _is_primary_process():
+        (output_dir / "train_config.json").write_text(
+            json.dumps(train_config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     train_result = trainer.train()
     trainer.save_model()
-    tokenizer.save_pretrained(output_dir)
-    trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
+    if trainer.is_world_process_zero():
+        tokenizer.save_pretrained(output_dir)
+        trainer.state.save_to_json(str(output_dir / "trainer_state.json"))
 
     train_metrics = dict(train_result.metrics)
     train_metrics["train_dataset_size"] = len(train_dataset)
-    (output_dir / "train_metrics.json").write_text(
-        json.dumps(train_metrics, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    if trainer.is_world_process_zero():
+        (output_dir / "train_metrics.json").write_text(
+            json.dumps(train_metrics, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     eval_metrics: dict[str, Any]
     if eval_dataset is None:
@@ -364,25 +763,39 @@ def train_controller_sft(
         eval_metrics = dict(trainer.evaluate(eval_dataset=eval_dataset))
         eval_metrics["eval_dataset_size"] = len(eval_dataset)
 
-    generation_rows = generate_eval_rows(
-        model=model,
-        tokenizer=tokenizer,
-        examples=eval_example_rows,
-        max_new_tokens=256,
-    )
-    generation_metrics = _build_generation_metrics(generation_rows)
-    eval_metrics.update(generation_metrics)
-    (output_dir / "eval_metrics.json").write_text(
-        json.dumps(eval_metrics, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    _write_generation_rows(output_dir=output_dir, rows=generation_rows)
+    if trainer.is_world_process_zero():
+        generation_rows = generate_eval_rows(
+            model=_unwrap_model(trainer.model),
+            tokenizer=tokenizer,
+            examples=eval_example_rows,
+            max_new_tokens=256,
+        )
+        generation_metrics = _build_generation_metrics(generation_rows)
+        eval_metrics.update(generation_metrics)
+        (output_dir / "eval_metrics.json").write_text(
+            json.dumps(eval_metrics, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _write_generation_rows(output_dir=output_dir, rows=generation_rows)
+    else:
+        generation_rows = []
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    if trainer.is_world_process_zero():
+        return {
+            "train_config": train_config,
+            "train_metrics": train_metrics,
+            "eval_metrics": eval_metrics,
+            "output_dir": to_safe_path(output_dir),
+        }
     return {
-        "train_config": train_config,
+        "train_config": {
+            "rank": _distributed_runtime_info()["rank"],
+            "world_size": _distributed_runtime_info()["world_size"],
+            "distributed_worker": True,
+        },
         "train_metrics": train_metrics,
         "eval_metrics": eval_metrics,
         "output_dir": to_safe_path(output_dir),

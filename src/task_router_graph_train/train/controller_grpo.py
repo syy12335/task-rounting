@@ -4,8 +4,10 @@ import copy
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -156,6 +158,19 @@ def train_controller_grpo(
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
+    n_gpus_per_node: int | None = None,
+    nnodes: int | None = None,
+    tensor_model_parallel_size: int | None = None,
+    data_parallel_size: int | None = None,
+    rollout_gpu_memory_utilization: float | None = None,
+    rollout_max_num_batched_tokens: int | None = None,
+    rollout_max_num_seqs: int | None = None,
+    actor_use_torch_compile: bool | None = None,
+    enable_activation_offload: bool | None = None,
+    actor_param_offload: bool | None = None,
+    actor_optimizer_offload: bool | None = None,
+    ref_param_offload: bool | None = None,
+    ref_optimizer_offload: bool | None = None,
     export_only: bool = False,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -183,6 +198,19 @@ def train_controller_grpo(
         lora_r=lora_r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
+        n_gpus_per_node=n_gpus_per_node,
+        nnodes=nnodes,
+        tensor_model_parallel_size=tensor_model_parallel_size,
+        data_parallel_size=data_parallel_size,
+        rollout_gpu_memory_utilization=rollout_gpu_memory_utilization,
+        rollout_max_num_batched_tokens=rollout_max_num_batched_tokens,
+        rollout_max_num_seqs=rollout_max_num_seqs,
+        actor_use_torch_compile=actor_use_torch_compile,
+        enable_activation_offload=enable_activation_offload,
+        actor_param_offload=actor_param_offload,
+        actor_optimizer_offload=actor_optimizer_offload,
+        ref_param_offload=ref_param_offload,
+        ref_optimizer_offload=ref_optimizer_offload,
         seed=seed,
     )
     teacher_config = resolve_teacher_config(effective_config, role="reward_judge")
@@ -197,6 +225,7 @@ def train_controller_grpo(
     model_path = str(effective_config.get("model", {}).get("path", "")).strip()
     if not model_path:
         raise ValueError("model.path or --model-name-or-path is required")
+    parallelism_warnings = _validate_verl_parallelism_config(effective_config)
 
     input_resolution = _resolve_grpo_input_artifacts(
         round_id=round_id,
@@ -288,6 +317,8 @@ def train_controller_grpo(
     }
     if compatibility_warnings:
         training_report["compatibility_warnings"] = compatibility_warnings
+    if parallelism_warnings:
+        training_report["parallelism_warnings"] = parallelism_warnings
 
     if should_run_update:
         training_report["update_result"] = _run_verl_training(
@@ -433,6 +464,48 @@ def _write_verl_rl_dataset(
     }
 
 
+def _validate_verl_parallelism_config(config: dict[str, Any]) -> list[str]:
+    rollout_cfg = dict(config.get("rollout", {}))
+    update_cfg = dict(config.get("update", {}))
+
+    n_gpus_per_node = int(update_cfg.get("n_gpus_per_node", 1))
+    nnodes = int(update_cfg.get("nnodes", 1))
+    tensor_model_parallel_size = int(rollout_cfg.get("tensor_model_parallel_size", 1))
+    data_parallel_size = int(rollout_cfg.get("data_parallel_size", 1))
+
+    if n_gpus_per_node <= 0:
+        raise ValueError("update.n_gpus_per_node must be positive")
+    if nnodes <= 0:
+        raise ValueError("update.nnodes must be positive")
+    if tensor_model_parallel_size <= 0:
+        raise ValueError("rollout.tensor_model_parallel_size must be positive")
+    if data_parallel_size <= 0:
+        raise ValueError("rollout.data_parallel_size must be positive")
+
+    total_gpus = n_gpus_per_node * nnodes
+    rollout_parallelism = tensor_model_parallel_size * data_parallel_size
+    if rollout_parallelism > total_gpus:
+        raise ValueError(
+            "rollout parallelism exceeds available GPUs: "
+            f"tensor_model_parallel_size({tensor_model_parallel_size}) * "
+            f"data_parallel_size({data_parallel_size}) > "
+            f"update.n_gpus_per_node({n_gpus_per_node}) * update.nnodes({nnodes})"
+        )
+    if total_gpus % rollout_parallelism != 0:
+        raise ValueError(
+            "available GPUs must be divisible by rollout parallelism: "
+            f"{total_gpus} % {rollout_parallelism} != 0"
+        )
+
+    warnings: list[str] = []
+    if total_gpus > 1 and rollout_parallelism == 1:
+        warnings.append(
+            "multiple GPUs are configured, but rollout.tensor_model_parallel_size=1 "
+            "and rollout.data_parallel_size=1 keep the rollout engine single-sharded."
+        )
+    return warnings
+
+
 def _build_verl_overrides(
     *,
     config: dict[str, Any],
@@ -485,7 +558,15 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu", int(update_cfg.get("per_device_train_batch_size", 1))),
         _hydra_override("actor_rollout_ref.actor.optim.lr", float(update_cfg["learning_rate"])),
         _hydra_override("actor_rollout_ref.actor.use_kl_loss", bool(update_cfg.get("use_kl_loss", True))),
+        _hydra_override("actor_rollout_ref.actor.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
+        _hydra_override("actor_rollout_ref.actor.fsdp_config.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
+        _hydra_override("actor_rollout_ref.actor.fsdp_config.param_offload", bool(update_cfg.get("actor_param_offload", False))),
+        _hydra_override("actor_rollout_ref.actor.fsdp_config.optimizer_offload", bool(update_cfg.get("actor_optimizer_offload", False))),
         _hydra_override("actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu", int(update_cfg.get("ref_log_prob_micro_batch_size_per_gpu", 1))),
+        _hydra_override("actor_rollout_ref.ref.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
+        _hydra_override("actor_rollout_ref.ref.fsdp_config.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
+        _hydra_override("actor_rollout_ref.ref.fsdp_config.param_offload", bool(update_cfg.get("ref_param_offload", False))),
+        _hydra_override("actor_rollout_ref.ref.fsdp_config.optimizer_offload", bool(update_cfg.get("ref_optimizer_offload", False))),
         _hydra_override("actor_rollout_ref.rollout.name", str(rollout_cfg.get("backend", "sglang"))),
         _hydra_override("actor_rollout_ref.rollout.load_format", str(rollout_cfg.get("load_format", "hf"))),
         _hydra_override("actor_rollout_ref.rollout.n", int(rollout_cfg["num_candidates"])),
@@ -501,6 +582,7 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.rollout.data_parallel_size", int(rollout_cfg.get("data_parallel_size", 1))),
         _hydra_override("actor_rollout_ref.rollout.max_num_batched_tokens", int(rollout_cfg.get("max_num_batched_tokens", 8192))),
         _hydra_override("actor_rollout_ref.rollout.max_num_seqs", int(rollout_cfg.get("max_num_seqs", 256))),
+        _hydra_override("actor_rollout_ref.model.enable_activation_offload", bool(update_cfg.get("enable_activation_offload", False))),
         _hydra_override("reward.num_workers", 1),
         _hydra_override("reward.reward_manager.source", "importlib"),
         _hydra_override("reward.reward_manager.name", "ControllerGroupRewardManager"),
@@ -544,32 +626,63 @@ def _run_verl_training(
     env["PYTHONPATH"] = src_root if not existing_pythonpath else src_root + os.pathsep + existing_pythonpath
     env["TASK_ROUTER_GRPO_RUNTIME_CONFIG_PATH"] = str(runtime_config_path.resolve())
 
-    proc = subprocess.run(
-        command,
-        cwd=repo_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-
     stdout_log = output_dir / "verl_stdout.log"
     stderr_log = output_dir / "verl_stderr.log"
-    stdout_log.write_text(proc.stdout or "", encoding="utf-8")
-    stderr_log.write_text(proc.stderr or "", encoding="utf-8")
+    with stdout_log.open("w", encoding="utf-8") as stdout_handle, stderr_log.open(
+        "w", encoding="utf-8"
+    ) as stderr_handle:
+        proc = subprocess.Popen(
+            command,
+            cwd=repo_root,
+            env=env,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+            start_new_session=True,
+        )
+        returncode = proc.wait()
 
-    if proc.returncode != 0:
+    if returncode != 0:
+        cleanup = _terminate_process_group(proc.pid)
         raise RuntimeError(
             "verl direct update failed with exit code "
-            f"{proc.returncode}. Check logs: {to_safe_path(stdout_log)} and {to_safe_path(stderr_log)}"
+            f"{returncode}. Check logs: {to_safe_path(stdout_log)} and {to_safe_path(stderr_log)}"
+            f". cleanup={cleanup}"
         )
 
     return {
         "status": "completed",
         "command": command,
-        "returncode": proc.returncode,
+        "returncode": returncode,
         "stdout_log": to_safe_path(stdout_log),
         "stderr_log": to_safe_path(stderr_log),
     }
+
+
+def _terminate_process_group(pgid: int, *, grace_sec: float = 5.0) -> dict[str, Any]:
+    result = {"process_group": int(pgid), "terminated": False, "killed": False}
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        result["terminated"] = True
+    except ProcessLookupError:
+        result["missing"] = True
+        return result
+
+    deadline = time.time() + max(0.0, float(grace_sec))
+    while time.time() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            result["exited"] = True
+            return result
+        time.sleep(0.1)
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        result["killed"] = True
+    except ProcessLookupError:
+        result["exited"] = True
+    return result
 
 
 def _load_training_config(config_path: Path) -> dict[str, Any]:
@@ -604,6 +717,19 @@ def _apply_training_overrides(
     lora_r: int,
     lora_alpha: int,
     lora_dropout: float,
+    n_gpus_per_node: int | None,
+    nnodes: int | None,
+    tensor_model_parallel_size: int | None,
+    data_parallel_size: int | None,
+    rollout_gpu_memory_utilization: float | None,
+    rollout_max_num_batched_tokens: int | None,
+    rollout_max_num_seqs: int | None,
+    actor_use_torch_compile: bool | None,
+    enable_activation_offload: bool | None,
+    actor_param_offload: bool | None,
+    actor_optimizer_offload: bool | None,
+    ref_param_offload: bool | None,
+    ref_optimizer_offload: bool | None,
     seed: int,
 ) -> None:
     config["seed"] = int(seed)
@@ -632,6 +758,16 @@ def _apply_training_overrides(
     rollout_cfg = dict(config.get("rollout", {}))
     if num_candidates is not None:
         rollout_cfg["num_candidates"] = int(num_candidates)
+    if tensor_model_parallel_size is not None:
+        rollout_cfg["tensor_model_parallel_size"] = int(tensor_model_parallel_size)
+    if data_parallel_size is not None:
+        rollout_cfg["data_parallel_size"] = int(data_parallel_size)
+    if rollout_gpu_memory_utilization is not None:
+        rollout_cfg["gpu_memory_utilization"] = float(rollout_gpu_memory_utilization)
+    if rollout_max_num_batched_tokens is not None:
+        rollout_cfg["max_num_batched_tokens"] = int(rollout_max_num_batched_tokens)
+    if rollout_max_num_seqs is not None:
+        rollout_cfg["max_num_seqs"] = int(rollout_max_num_seqs)
     config["rollout"] = rollout_cfg
 
     model_cfg = dict(config.get("model", {}))
@@ -649,6 +785,22 @@ def _apply_training_overrides(
     update_cfg["learning_rate"] = float(learning_rate)
     update_cfg["per_device_train_batch_size"] = int(per_device_train_batch_size)
     update_cfg["gradient_accumulation_steps"] = int(gradient_accumulation_steps)
+    if n_gpus_per_node is not None:
+        update_cfg["n_gpus_per_node"] = int(n_gpus_per_node)
+    if nnodes is not None:
+        update_cfg["nnodes"] = int(nnodes)
+    if actor_use_torch_compile is not None:
+        update_cfg["actor_use_torch_compile"] = bool(actor_use_torch_compile)
+    if enable_activation_offload is not None:
+        update_cfg["enable_activation_offload"] = bool(enable_activation_offload)
+    if actor_param_offload is not None:
+        update_cfg["actor_param_offload"] = bool(actor_param_offload)
+    if actor_optimizer_offload is not None:
+        update_cfg["actor_optimizer_offload"] = bool(actor_optimizer_offload)
+    if ref_param_offload is not None:
+        update_cfg["ref_param_offload"] = bool(ref_param_offload)
+    if ref_optimizer_offload is not None:
+        update_cfg["ref_optimizer_offload"] = bool(ref_optimizer_offload)
     update_cfg["train_batch_size"] = max(
         int(update_cfg.get("train_batch_size", 0)),
         int(per_device_train_batch_size) * max(1, int(gradient_accumulation_steps)),

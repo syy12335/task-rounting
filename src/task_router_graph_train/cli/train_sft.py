@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from ..train import train_controller_sft
@@ -55,6 +56,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bf16", action="store_true")
+    parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument("--torch-empty-cache-steps", type=int, default=None)
+    parser.add_argument("--nproc-per-node", type=int, default=1)
+    parser.add_argument("--nnodes", type=int, default=1)
+    parser.add_argument("--node-rank", type=int, default=0)
+    parser.add_argument("--master-addr", default="127.0.0.1")
+    parser.add_argument("--master-port", type=int, default=29500)
+    parser.add_argument("--distributed-worker", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -78,8 +89,19 @@ def main() -> None:
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         seed=args.seed,
+        bf16=bool(args.bf16),
+        fp16=bool(args.fp16),
+        gradient_checkpointing=bool(args.gradient_checkpointing),
+        torch_empty_cache_steps=args.torch_empty_cache_steps,
+        nproc_per_node=args.nproc_per_node,
+        nnodes=args.nnodes,
+        node_rank=args.node_rank,
+        master_addr=args.master_addr,
+        master_port=args.master_port,
+        distributed_worker=bool(args.distributed_worker),
     )
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if int(os.environ.get("RANK", "0")) == 0:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

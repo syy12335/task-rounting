@@ -106,6 +106,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument("--n-gpus-per-node", type=int, default=None)
+    parser.add_argument("--nnodes", type=int, default=None)
+    parser.add_argument("--tensor-model-parallel-size", type=int, default=None)
+    parser.add_argument("--data-parallel-size", type=int, default=None)
+    parser.add_argument("--rollout-gpu-memory-utilization", type=float, default=None)
+    parser.add_argument("--rollout-max-num-batched-tokens", type=int, default=None)
+    parser.add_argument("--rollout-max-num-seqs", type=int, default=None)
+    parser.add_argument("--actor-use-torch-compile", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--enable-activation-offload", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--actor-param-offload", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--actor-optimizer-offload", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--ref-param-offload", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--ref-optimizer-offload", action=argparse.BooleanOptionalAction, default=None)
     return parser.parse_args()
 
 
@@ -144,6 +157,19 @@ def main() -> None:
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
+        n_gpus_per_node=args.n_gpus_per_node,
+        nnodes=args.nnodes,
+        tensor_model_parallel_size=args.tensor_model_parallel_size,
+        data_parallel_size=args.data_parallel_size,
+        rollout_gpu_memory_utilization=args.rollout_gpu_memory_utilization,
+        rollout_max_num_batched_tokens=args.rollout_max_num_batched_tokens,
+        rollout_max_num_seqs=args.rollout_max_num_seqs,
+        actor_use_torch_compile=args.actor_use_torch_compile,
+        enable_activation_offload=args.enable_activation_offload,
+        actor_param_offload=args.actor_param_offload,
+        actor_optimizer_offload=args.actor_optimizer_offload,
+        ref_param_offload=args.ref_param_offload,
+        ref_optimizer_offload=args.ref_optimizer_offload,
         export_only=bool(args.export_only),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

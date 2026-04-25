@@ -4,6 +4,8 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
 from task_router_graph_train.dataset import prepare_round_assets
 from task_router_graph_train.train import controller_grpo
 from task_router_graph_train.train import controller_grpo_teacher
@@ -70,13 +72,21 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
     overrides = controller_grpo._build_verl_overrides(
         config={
             "model": {"path": "/model/default", "target_modules": ["q_proj", "v_proj"], "attn_implementation": "eager"},
-            "rollout": {"backend": "sglang", "num_candidates": 4},
+            "rollout": {"backend": "sglang", "num_candidates": 4, "tensor_model_parallel_size": 2, "data_parallel_size": 2},
             "update": {
                 "logger": ["console"],
                 "learning_rate": 2e-4,
                 "per_device_train_batch_size": 1,
+                "n_gpus_per_node": 4,
+                "nnodes": 1,
                 "ref_log_prob_micro_batch_size_per_gpu": 1,
                 "rollout_log_prob_micro_batch_size_per_gpu": 1,
+                "actor_use_torch_compile": False,
+                "enable_activation_offload": True,
+                "actor_param_offload": True,
+                "actor_optimizer_offload": True,
+                "ref_param_offload": True,
+                "ref_optimizer_offload": False,
             },
             "data": {
                 "train_batch_size": 8,
@@ -92,6 +102,32 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
     assert "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1" in overrides
     assert "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1" in overrides
     assert '+actor_rollout_ref.model.override_config.attn_implementation="eager"' in overrides
+    assert "trainer.n_gpus_per_node=4" in overrides
+    assert "actor_rollout_ref.rollout.tensor_model_parallel_size=2" in overrides
+    assert "actor_rollout_ref.rollout.data_parallel_size=2" in overrides
+    assert "actor_rollout_ref.actor.use_torch_compile=false" in overrides
+    assert "actor_rollout_ref.actor.fsdp_config.param_offload=true" in overrides
+    assert "actor_rollout_ref.model.enable_activation_offload=true" in overrides
+
+
+def test_validate_verl_parallelism_rejects_invalid_rollout_parallelism() -> None:
+    with pytest.raises(ValueError):
+        controller_grpo._validate_verl_parallelism_config(
+            {
+                "rollout": {"tensor_model_parallel_size": 3, "data_parallel_size": 2},
+                "update": {"n_gpus_per_node": 4, "nnodes": 1},
+            }
+        )
+
+
+def test_validate_verl_parallelism_warns_when_multi_gpu_rollout_is_single_shard() -> None:
+    warnings = controller_grpo._validate_verl_parallelism_config(
+        {
+            "rollout": {"tensor_model_parallel_size": 1, "data_parallel_size": 1},
+            "update": {"n_gpus_per_node": 4, "nnodes": 1},
+        }
+    )
+    assert warnings
 
 
 def test_inspect_candidate_action_separates_parse_schema_protocol() -> None:

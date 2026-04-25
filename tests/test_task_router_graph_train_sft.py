@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ def test_train_controller_sft_signature_drops_legacy_manifest_inputs() -> None:
     params = inspect.signature(controller_sft.train_controller_sft).parameters
     assert "asset_manifest" not in params
     assert "run_dir" not in params
+    assert "nproc_per_node" in params
 
 
 def test_sft_input_resolution_defaults_to_latest_round(tmp_path: Path) -> None:
@@ -43,3 +45,60 @@ def test_sft_input_resolution_rejects_unsafe_without_flag(tmp_path: Path) -> Non
             round_manifest=None,
             allow_unsafe_path_input=False,
         )
+
+
+def test_train_controller_sft_multi_gpu_launches_before_loading_training_deps(monkeypatch, tmp_path: Path) -> None:
+    def _should_not_load() -> dict[str, object]:
+        raise AssertionError("training dependencies should not load before distributed launcher")
+
+    monkeypatch.setattr(controller_sft, "_require_training_dependencies", _should_not_load)
+    monkeypatch.setattr(
+        controller_sft,
+        "_run_distributed_sft",
+        lambda **kwargs: {"launcher": {"nproc_per_node": kwargs["nproc_per_node"]}, "output_dir": str(kwargs["output_dir"])},
+    )
+    report = controller_sft.train_controller_sft(
+        model_name_or_path="/model/default",
+        lora_target_modules=["q_proj", "v_proj"],
+        output_dir=tmp_path,
+        nproc_per_node=2,
+    )
+    assert report["launcher"]["nproc_per_node"] == 2
+
+
+def test_build_distributed_launch_command_uses_torchrun_module(tmp_path: Path) -> None:
+    command = controller_sft._build_distributed_launch_command(
+        model_name_or_path="/model/default",
+        lora_target_modules=["q_proj", "v_proj"],
+        train_examples=None,
+        eval_examples=None,
+        round_id="round_0001",
+        round_manifest=None,
+        allow_unsafe_path_input=False,
+        output_dir=tmp_path,
+        num_train_epochs=2,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        max_seq_length=1024,
+        lora_r=8,
+        lora_alpha=16,
+        lora_dropout=0.05,
+        seed=42,
+        bf16=True,
+        fp16=False,
+        gradient_checkpointing=True,
+        torch_empty_cache_steps=1,
+        nproc_per_node=4,
+        nnodes=1,
+        node_rank=0,
+        master_addr="127.0.0.1",
+        master_port=29501,
+    )
+    assert command[:3] == [sys.executable, "-m", "torch.distributed.run"]
+    assert "--standalone" in command
+    assert "--module" in command
+    assert "task_router_graph_train.cli.train_sft" in command
+    assert "--distributed-worker" in command
+    assert "--bf16" in command
+    assert "--gradient-checkpointing" in command
