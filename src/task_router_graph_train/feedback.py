@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .admissions import build_admission_fingerprint, load_admission_rows
 from .artifacts import TEACHER_DECISIONS_ARTIFACT_TYPE, to_safe_path, utc_now_iso, write_json
-from .dataset import read_jsonl, write_jsonl
+from .dataset import load_manual_protocol_samples, read_jsonl, write_jsonl
 from .rounds import load_round_manifest, resolve_round_asset_path
-from .runtime_adapter import validate_runtime_controller_action
+from .runtime_adapter import build_controller_state_input, validate_runtime_controller_action
 from .train.controller_grpo_teacher import parse_candidate_action, resolve_teacher_config, review_badcase_for_sft, validate_protocol_action
 from .types import SftAdmissionRow, TeacherQueueRow
 import yaml
@@ -71,9 +72,10 @@ def admit_sft_admissions(
         if not bool(row.get("admission", False)):
             continue
         sample_id = str(row.get("sample_id", "")).strip()
+        reason = str(row.get("reason", "")).strip()
         state_input = row.get("state_input", {})
         reference_action = row.get("reference_action", {})
-        if not sample_id or not isinstance(state_input, dict) or not isinstance(reference_action, dict):
+        if not sample_id or not reason or not isinstance(state_input, dict) or not isinstance(reference_action, dict):
             continue
         valid, _ = validate_runtime_controller_action(reference_action)
         protocol_valid, _ = validate_protocol_action(reference_action) if valid else (False, [])
@@ -84,7 +86,7 @@ def admit_sft_admissions(
                 sample_id=sample_id,
                 state_input=copy.deepcopy(state_input),
                 reference_action=copy.deepcopy(reference_action),
-                reason=str(row.get("reason", "")).strip(),
+                reason=reason,
                 source_round=str(row.get("source_round", manifest.get("round_id", round_id or ""))).strip()
                 or str(manifest.get("round_id", round_id or "")),
             )
@@ -92,13 +94,16 @@ def admit_sft_admissions(
 
     existing = read_jsonl(admissions_path) if admissions_path.exists() and admissions_path.read_text(encoding="utf-8").strip() else []
     seen_ids = {str(row.get("sample_id", "")).strip() for row in existing}
+    seen_fingerprints = _collect_round_training_fingerprints(manifest)
     appended: list[dict[str, Any]] = []
     for row in valid_admissions:
         payload = row.to_dict()
-        if payload["sample_id"] in seen_ids:
+        fingerprint = build_admission_fingerprint(row.state_input, row.reference_action)
+        if payload["sample_id"] in seen_ids or fingerprint in seen_fingerprints:
             continue
         appended.append(payload)
         seen_ids.add(payload["sample_id"])
+        seen_fingerprints.add(fingerprint)
 
     merged = existing + appended
     write_jsonl(admissions_path, merged)
@@ -295,6 +300,32 @@ def _build_dedup_key(state_input: dict[str, Any], policy_output: dict[str, Any])
         sort_keys=True,
     )
     return hashlib.sha256(signature.encode("utf-8")).hexdigest()
+
+
+def _collect_round_training_fingerprints(manifest: dict[str, Any]) -> set[str]:
+    fingerprints: set[str] = set()
+    lineage = manifest.get("lineage", {})
+    if isinstance(lineage, dict):
+        manual_protocol_root = str(lineage.get("manual_protocol", "")).strip()
+        if manual_protocol_root:
+            for row in load_manual_protocol_samples(Path(manual_protocol_root).resolve()):
+                if row["split"] == "holdout":
+                    continue
+                state_input = build_controller_state_input(
+                    user_input=row["user_input"],
+                    environment_payload=copy.deepcopy(row["environment"]),
+                )
+                fingerprints.add(build_admission_fingerprint(state_input, row["target_action"]))
+
+        previous_admissions_path = str(lineage.get("previous_admissions", "")).strip()
+        if previous_admissions_path:
+            for row in load_admission_rows(Path(previous_admissions_path).resolve()):
+                fingerprints.add(build_admission_fingerprint(row.state_input, row.reference_action))
+
+    current_admissions_path = resolve_round_asset_path(manifest, "sft_admissions")
+    for row in load_admission_rows(current_admissions_path):
+        fingerprints.add(build_admission_fingerprint(row.state_input, row.reference_action))
+    return fingerprints
 
 
 def _update_round_manifest(

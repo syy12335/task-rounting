@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 from task_router_graph_train.dataset import prepare_round_assets
@@ -28,6 +29,41 @@ def test_grpo_input_resolution_reads_round_records(tmp_path: Path) -> None:
     )
     assert resolved["controller_records"]
     assert not resolved["unsafe_path_input"]
+    first = resolved["controller_records"][0]
+    assert not hasattr(first, "gold_output")
+    assert not hasattr(first, "verifier_sidecar")
+
+
+def test_grpo_input_resolution_rejects_legacy_reference_fields(tmp_path: Path) -> None:
+    train_path = tmp_path / "train.jsonl"
+    eval_path = tmp_path / "eval.jsonl"
+    row = {
+        "sample_id": "g1",
+        "role": "controller",
+        "state_input": {"USER_INPUT": "u", "ENVIRONMENT_JSON": {}, "SKILLS_INDEX": "[]"},
+        "reward_spec_id": "controller_grpo_v1",
+        "split": "train",
+        "metadata": {},
+        "gold_output": {},
+    }
+    train_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    eval_row = dict(row)
+    eval_row["sample_id"] = "g2"
+    eval_row["split"] = "eval"
+    eval_path.write_text(json.dumps(eval_row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    try:
+        controller_grpo._resolve_grpo_input_artifacts(
+            round_id=None,
+            round_manifest=None,
+            train_records=train_path,
+            eval_records=eval_path,
+            allow_unsafe_path_input=True,
+        )
+    except ValueError as exc:
+        assert "must not include gold_output" in str(exc)
+    else:
+        raise AssertionError("expected GRPO parser to reject legacy gold_output rows")
 
 
 def test_inspect_candidate_action_separates_parse_schema_protocol() -> None:

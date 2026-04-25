@@ -47,9 +47,9 @@
 ## 本阶段重点变化
 
 1. 训练闭环从“分散入口”收口到 manifest 主线。
-2. controller 后训练已经形成 `SFT -> feedback assets -> GRPO -> regression -> failed harvest` 的连续闭环。
-3. teacher 职责正式拆分为三路：`reward_judge / reference_generator / regression_judge`。
-4. badcase 回流开始具备 run-scoped manifest、coverage 面板和下一轮 failed harvest。
+2. 旧的 `feedback assets / regression / failed harvest` 现在只应视为历史阶段，不再是正式主线。
+3. 当前 controller 后训练正式主线是 `manual_protocol_v1 -> SFT -> GRPO -> teacher_queue -> annotate_queue -> sft_admissions -> next round SFT`。
+4. teacher 职责当前按正式链路收口为 reward ranking、holdout 语义判等与 badcase admission 三类评判。
 5. 训练、评测、CLI 报告中的路径统一脱敏成 repo-relative 形式。
 6. `TASKS_JSON -> ENVIRONMENT_JSON` 的输入命名迁移已经落地，训练态 state 与运行时 contract 更一致。
 7. 根 README 对外定位改成通用工程场景，`functest / accutest / perftest` 明确标为当前内置示例 task family。
@@ -64,8 +64,8 @@
 3. `src/task_router_graph_train/docs/overview.md`
    - 看训练闭环总图与输入输出约定
 4. `src/task_router_graph_train/docs/data_contract.md`
-   - 看 teacher_source、badcase、manifest、regression records 的正式契约
-5. `src/task_router_graph_train/docs/eval_spec.md`
-   - 看 holdout evaluator、controller regression 和 failed harvest 的关系
-6. `src/task_router_graph_train/docs/training_plan_v1.md`
-   - 最后看 v1 训练边界与未来扩展方向
+   - 看 manual protocol、round manifest、teacher_queue、sft_admissions 的正式契约
+5. `src/task_router_graph_train/docs/controller_grpo_reward_spec.md`
+   - 看 GRPO reward、hard gate 与 teacher ranking 的当前规则
+6. `src/task_router_graph_train/docs/post_training_v1.md`
+   - 最后看当前正式主线的闭环约束与后续演进边界

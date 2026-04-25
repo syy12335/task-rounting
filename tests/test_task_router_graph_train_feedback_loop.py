@@ -72,6 +72,75 @@ def test_admit_sft_admissions_accepts_only_valid_action(tmp_path: Path) -> None:
     assert report["admitted_count"] == 1
 
 
+def test_admit_sft_admissions_rejects_empty_reason(tmp_path: Path) -> None:
+    round_root = tmp_path / "rounds"
+    report = prepare_round_assets(round_id="round_0001", round_assets_root=round_root)
+
+    decisions_path = tmp_path / "decisions.jsonl"
+    valid_action = {
+        "action_kind": "observe",
+        "tool": "build_context_view",
+        "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
+        "reason": "admit",
+    }
+    decisions_path.write_text(
+        json.dumps({"sample_id": "a1", "admission": True, "state_input": _state_input(), "reference_action": valid_action, "reason": ""}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    report = admit_sft_admissions(round_manifest=Path(report["manifest_path"]), teacher_decisions_path=decisions_path)
+    assert report["admitted_count"] == 0
+
+
+def test_admit_sft_admissions_rejects_duplicate_training_content(tmp_path: Path) -> None:
+    round_root = tmp_path / "rounds"
+    report = prepare_round_assets(round_id="round_0001", round_assets_root=round_root)
+
+    decisions_path = tmp_path / "decisions.jsonl"
+    state_input = build_controller_state_input(
+        user_input="现在进展怎么样了",
+        environment_payload={
+            "cur_round": 2,
+            "rounds": [
+                {
+                    "round_id": 1,
+                    "user_input": "帮我整理最近一周上海AI大会消息",
+                    "reply": "",
+                    "tasks": [
+                        {
+                            "task_id": 1,
+                            "task": {
+                                "task_id": 1,
+                                "type": "executor",
+                                "content": "用户目标：整理最近一周上海AI大会消息\n任务限制：只基于公开信息收集，不猜测未提供的外部事实",
+                                "status": "running",
+                                "result": "正在执行",
+                            },
+                            "track": [],
+                        }
+                    ],
+                },
+                {"round_id": 2, "user_input": "现在进展怎么样了", "reply": "", "tasks": []},
+            ],
+            "history_summaries": [],
+            "history_meta_summary": "",
+        },
+    )
+    reference_action = {
+        "action_kind": "observe",
+        "tool": "build_context_view",
+        "args": {"round_limit": 3, "include_trace": False, "include_user_input": True, "include_task": True, "include_reply": True},
+        "reason": "当前已有运行中任务，先读取正式上下文再决定下一步。",
+    }
+    decisions_path.write_text(
+        json.dumps({"sample_id": "dup_1", "admission": True, "state_input": state_input, "reference_action": reference_action, "reason": "duplicate"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    report = admit_sft_admissions(round_manifest=Path(report["manifest_path"]), teacher_decisions_path=decisions_path)
+    assert report["admitted_count"] == 0
+
+
 def test_annotate_teacher_queue_generates_decisions_and_admissions(monkeypatch, tmp_path: Path) -> None:
     round_root = tmp_path / "rounds"
     report = prepare_round_assets(round_id="round_0001", round_assets_root=round_root)

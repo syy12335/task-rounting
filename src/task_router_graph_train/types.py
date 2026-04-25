@@ -49,6 +49,26 @@ class TrainingRecord:
 
 
 @dataclass
+class ControllerGrpoRecord:
+    sample_id: str
+    role: str
+    state_input: dict[str, Any]
+    reward_spec_id: str
+    split: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sample_id": self.sample_id,
+            "role": self.role,
+            "state_input": dict(self.state_input),
+            "reward_spec_id": self.reward_spec_id,
+            "split": self.split,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass
 class SftExample:
     sample_id: str
     split: str

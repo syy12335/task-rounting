@@ -32,6 +32,7 @@ from .runtime_adapter import (
     resolve_controller_state_view_from_config,
     validate_runtime_controller_action,
 )
+from .types import ControllerGrpoRecord
 from .train import (
     ControllerSftJsonlDataset,
     build_grpo_rollout_groups,
@@ -48,6 +49,7 @@ from .train import (
 __all__ = [
     "ASSETS_ROOT",
     "CONFIGS_ROOT",
+    "ControllerGrpoRecord",
     "ControllerSftJsonlDataset",
     "DEFAULT_CONTROLLER_STATE_VIEW",
     "DOCS_ROOT",

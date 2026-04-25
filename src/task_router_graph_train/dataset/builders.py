@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..admissions import load_admission_rows
 from ..artifacts import (
     CONTROLLER_TRAINING_RECORDS_ARTIFACT_TYPE,
     HOLDOUT_RECORDS_ARTIFACT_TYPE,
@@ -19,7 +20,7 @@ from ..artifacts import (
 from ..reward_specs import CONTROLLER_REWARD_SPEC_ID
 from ..rounds import resolve_round_assets_root, resolve_round_dir
 from ..runtime_adapter import ASSETS_ROOT, REPO_ROOT, build_controller_state_input, validate_runtime_controller_action
-from ..types import SftAdmissionRow, SftExample, TrainingRecord, VerifierSidecar
+from ..types import ControllerGrpoRecord, SftAdmissionRow, SftExample, TrainingRecord, VerifierSidecar
 from .io import read_jsonl, write_jsonl
 
 FORMAL_ENVIRONMENT_KEYS = (
@@ -192,10 +193,10 @@ def prepare_round_assets(
         round_assets_root=rounds_root,
         previous_round_id=previous_round_id,
     )
-    admission_rows = _load_admission_rows(admissions_path)
+    admission_rows = load_admission_rows(admissions_path)
 
     sft_records: list[TrainingRecord] = []
-    grpo_records: list[TrainingRecord] = []
+    grpo_records: list[ControllerGrpoRecord] = []
     holdout_rows: list[dict[str, Any]] = []
 
     for row in manual_rows:
@@ -231,21 +232,17 @@ def prepare_round_assets(
             )
         )
         grpo_records.append(
-            TrainingRecord(
+            ControllerGrpoRecord(
                 sample_id=row["sample_id"],
                 role=ROLE_CONTROLLER,
                 state_input=copy.deepcopy(state_input),
-                gold_output={},
-                verifier_sidecar=VerifierSidecar(),
                 reward_spec_id=CONTROLLER_REWARD_SPEC_ID,
                 split=mapped_split,
                 metadata={"source": "manual_protocol_v1", "bucket_key": row["bucket_key"]},
             )
         )
 
-    admission_records, admission_grpo_records = _build_admission_records(admission_rows)
-    sft_records.extend(admission_records)
-    grpo_records.extend(admission_grpo_records)
+    sft_records.extend(_build_admission_sft_records(admission_rows))
 
     sft_examples = build_controller_sft_examples(sft_records)
     sft_train_examples = [row.to_dict() for row in sft_examples if row.split == "train"]
@@ -268,7 +265,8 @@ def prepare_round_assets(
     if not teacher_queue_path.exists():
         teacher_queue_path.write_text("", encoding="utf-8")
     if not sft_admissions_path.exists():
-        write_jsonl(sft_admissions_path, [row.to_dict() for row in admission_rows])
+        sft_admissions_path.write_text("", encoding="utf-8")
+    current_admissions = read_jsonl(sft_admissions_path) if sft_admissions_path.read_text(encoding="utf-8").strip() else []
 
     counts_by_split = {
         "sft_train": len(sft_train_examples),
@@ -276,7 +274,7 @@ def prepare_round_assets(
         "grpo_train": len([row for row in grpo_records if row.split == "train"]),
         "grpo_eval": len([row for row in grpo_records if row.split == "eval"]),
         "holdout": len(holdout_rows),
-        "sft_admissions": len(admission_rows),
+        "sft_admissions": len(current_admissions),
     }
 
     manifest = {
@@ -331,9 +329,8 @@ def prepare_round_assets(
     }
 
 
-def _build_admission_records(admissions: list[SftAdmissionRow]) -> tuple[list[TrainingRecord], list[TrainingRecord]]:
+def _build_admission_sft_records(admissions: list[SftAdmissionRow]) -> list[TrainingRecord]:
     sft_records: list[TrainingRecord] = []
-    grpo_records: list[TrainingRecord] = []
     for row in admissions:
         split = _resolve_admission_split(row.sample_id)
         metadata = {"source": "sft_admissions", "source_round": row.source_round}
@@ -349,19 +346,7 @@ def _build_admission_records(admissions: list[SftAdmissionRow]) -> tuple[list[Tr
                 metadata=copy.deepcopy(metadata),
             )
         )
-        grpo_records.append(
-            TrainingRecord(
-                sample_id=row.sample_id,
-                role=ROLE_CONTROLLER,
-                state_input=copy.deepcopy(row.state_input),
-                gold_output={},
-                verifier_sidecar=VerifierSidecar(),
-                reward_spec_id=CONTROLLER_REWARD_SPEC_ID,
-                split=split,
-                metadata=copy.deepcopy(metadata),
-            )
-        )
-    return sft_records, grpo_records
+    return sft_records
 
 
 def _resolve_previous_admissions_path(*, round_assets_root: Path, previous_round_id: str | None) -> Path | None:
@@ -372,38 +357,6 @@ def _resolve_previous_admissions_path(*, round_assets_root: Path, previous_round
     if not path.exists():
         raise FileNotFoundError(f"previous round admissions not found: {path}")
     return path
-
-
-def _load_admission_rows(path: Path | None) -> list[SftAdmissionRow]:
-    if path is None:
-        return []
-    rows = read_jsonl(path)
-    admissions: list[SftAdmissionRow] = []
-    seen: set[str] = set()
-    for row in rows:
-        sample_id = str(row.get("sample_id", "")).strip()
-        if not sample_id or sample_id in seen:
-            continue
-        seen.add(sample_id)
-        state_input = row.get("state_input", {})
-        reference_action = row.get("reference_action", {})
-        if not isinstance(state_input, dict) or not isinstance(reference_action, dict):
-            continue
-        valid, _ = validate_runtime_controller_action(reference_action)
-        if not valid:
-            continue
-        admissions.append(
-            SftAdmissionRow(
-                sample_id=sample_id,
-                state_input=copy.deepcopy(state_input),
-                reference_action=copy.deepcopy(reference_action),
-                reason=str(row.get("reason", "")).strip(),
-                source_round=str(row.get("source_round", "")).strip(),
-            )
-        )
-    return admissions
-
-
 def _resolve_admission_split(sample_id: str) -> str:
     digest = hashlib.sha256(sample_id.encode("utf-8")).hexdigest()
     return "eval" if int(digest[:2], 16) < 26 else "train"

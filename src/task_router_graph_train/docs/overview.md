@@ -16,6 +16,7 @@
 - frozen base: `assets/manual_protocol_v1/`
 - round 资产: `assets/post_training/rounds/<round_id>/`
 - 当前轮 SFT: `manual_protocol_v1.sft + previous_round.sft_admissions`
+- 当前轮 GRPO: 只使用 `manual_protocol_v1.sft` 派生的 state-side records
 - holdout: 从 `manual_protocol_v1.split=holdout` 派生，仅用于评测
 
 ## 入口

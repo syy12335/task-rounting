@@ -16,7 +16,7 @@ from ..dataset import render_controller_prompt, write_jsonl
 from ..dataset.io import read_jsonl
 from ..rounds import load_round_manifest, resolve_round_asset_path
 from ..runtime_adapter import CONFIGS_ROOT, REPO_ROOT, validate_runtime_controller_action
-from ..types import TrainingRecord, VerifierSidecar
+from ..types import ControllerGrpoRecord
 from .controller_grpo_teacher import (
     DEFAULT_TEACHER_DATA_SOURCE,
     judge_controller_group,
@@ -35,7 +35,7 @@ def validate_controller_action(action: dict[str, Any]) -> tuple[bool, list[str]]
 
 def build_grpo_rollout_groups(
     *,
-    records: list[TrainingRecord],
+    records: list[ControllerGrpoRecord],
     num_candidates: int,
     seed: int,
     rollout_mode: str = "disabled",
@@ -321,7 +321,6 @@ def _resolve_grpo_input_artifacts(
         train_path = resolve_round_asset_path(manifest, "controller_records_train")
         eval_path = resolve_round_asset_path(manifest, "controller_records_eval")
         controller_records = _load_training_records_from_jsonl(train_path=train_path, eval_path=eval_path)
-        controller_records = _strip_reference_from_training_records(controller_records)
         return {
             "controller_records": controller_records,
             "input_manifest_path": to_safe_path(str(manifest.get("_manifest_path", ""))),
@@ -337,7 +336,6 @@ def _resolve_grpo_input_artifacts(
             train_path=Path(train_records).resolve(),
             eval_path=Path(eval_records).resolve(),
         )
-        controller_records = _strip_reference_from_training_records(controller_records)
         return {
             "controller_records": controller_records,
             "input_manifest_path": "",
@@ -347,33 +345,15 @@ def _resolve_grpo_input_artifacts(
     raise ValueError("unable to resolve GRPO input artifacts")
 
 
-def _load_training_records_from_jsonl(*, train_path: Path, eval_path: Path) -> list[TrainingRecord]:
-    rows: list[TrainingRecord] = []
+def _load_training_records_from_jsonl(*, train_path: Path, eval_path: Path) -> list[ControllerGrpoRecord]:
+    rows: list[ControllerGrpoRecord] = []
     for split, path in (("train", train_path), ("eval", eval_path)):
         for row in read_jsonl(path):
-            rows.append(_training_record_from_row(row=row, source_path=path, expected_split=split))
+            rows.append(_controller_grpo_record_from_row(row=row, source_path=path, expected_split=split))
     return rows
 
 
-def _strip_reference_from_training_records(records: list[TrainingRecord]) -> list[TrainingRecord]:
-    sanitized: list[TrainingRecord] = []
-    for record in records:
-        sanitized.append(
-            TrainingRecord(
-                sample_id=record.sample_id,
-                role=record.role,
-                state_input=copy.deepcopy(record.state_input),
-                gold_output={},
-                verifier_sidecar=copy.deepcopy(record.verifier_sidecar),
-                reward_spec_id=record.reward_spec_id,
-                split=record.split,
-                metadata=copy.deepcopy(record.metadata),
-            )
-        )
-    return sanitized
-
-
-def _training_record_from_row(*, row: dict[str, Any], source_path: Path, expected_split: str) -> TrainingRecord:
+def _controller_grpo_record_from_row(*, row: dict[str, Any], source_path: Path, expected_split: str) -> ControllerGrpoRecord:
     role = str(row.get("role", "")).strip()
     split = str(row.get("split", "")).strip()
     sample_id = str(row.get("sample_id", "")).strip()
@@ -386,38 +366,23 @@ def _training_record_from_row(*, row: dict[str, Any], source_path: Path, expecte
         raise ValueError(f"{source_path} row missing sample_id")
     if not isinstance(state_input, dict):
         raise ValueError(f"{source_path} state_input must be object: {sample_id}")
-    return TrainingRecord(
+    if "gold_output" in row:
+        raise ValueError(f"{source_path} controller GRPO row must not include gold_output: {sample_id}")
+    if "verifier_sidecar" in row:
+        raise ValueError(f"{source_path} controller GRPO row must not include verifier_sidecar: {sample_id}")
+    return ControllerGrpoRecord(
         sample_id=sample_id,
         role=role,
         state_input=copy.deepcopy(state_input),
-        gold_output={},
-        verifier_sidecar=_coerce_verifier_sidecar(row.get("verifier_sidecar", {})),
         reward_spec_id=str(row.get("reward_spec_id", "controller_grpo_v1")),
         split=split,
         metadata=copy.deepcopy(row.get("metadata", {})) if isinstance(row.get("metadata", {}), dict) else {},
     )
 
 
-def _coerce_verifier_sidecar(payload: Any) -> VerifierSidecar:
-    if not isinstance(payload, dict):
-        payload = {}
-    return VerifierSidecar(
-        environment_snapshot_id=str(payload.get("environment_snapshot_id", "")).strip(),
-        annotation=str(payload.get("annotation", "")).strip(),
-        task_focus=str(payload.get("task_focus", "")).strip(),
-        leaderboards=list(payload.get("leaderboards", [])) if isinstance(payload.get("leaderboards", []), list) else [],
-        environment_extras=copy.deepcopy(payload.get("environment_extras", {}))
-        if isinstance(payload.get("environment_extras", {}), dict)
-        else {},
-        runtime_shape_preview=copy.deepcopy(payload.get("runtime_shape_preview", {}))
-        if isinstance(payload.get("runtime_shape_preview", {}), dict)
-        else {},
-    )
-
-
 def _write_verl_rl_dataset(
     *,
-    records: list[TrainingRecord],
+    records: list[ControllerGrpoRecord],
     output_dir: Path,
     num_candidates: int,
     teacher_context: dict[str, Any],

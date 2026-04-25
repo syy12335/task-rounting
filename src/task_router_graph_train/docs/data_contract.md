@@ -67,7 +67,9 @@ current_sft_data = manual_protocol_v1.sft + previous_round.sft_admissions
 
 - policy I/O 与 SFT 一致
 - 输入使用当前 round 的 `controller_records_*`
-- 不依赖 reference 数据
+- `controller_records_*` 是 GRPO 专用 record
+- 只保留 state-side 输入，不保留 `gold_output` / `reference_action`
+- 不包含 `verifier_sidecar`
 
 ## Holdout Evaluate
 

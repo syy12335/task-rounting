@@ -11,6 +11,7 @@
 
 - 唯一基础真源：`src/task_router_graph_train/assets/manual_protocol_v1/`
 - 当前轮次 SFT 数据：`manual_protocol_v1.sft + previous_round.sft_admissions`
+- 当前轮次 GRPO 数据：仅来自 `manual_protocol_v1.sft` 派生的 `controller_records_*`
 - `holdout` 固定从 `manual_protocol_v1.split=holdout` 派生，且不进入训练
 - round 资产目录：`src/task_router_graph_train/assets/post_training/rounds/<round_id>/`
 
