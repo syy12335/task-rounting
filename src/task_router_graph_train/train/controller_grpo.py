@@ -475,14 +475,21 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.model.lora_rank", int(model_cfg.get("lora_rank", 8))),
         _hydra_override("actor_rollout_ref.model.lora_alpha", int(model_cfg.get("lora_alpha", 16))),
         _hydra_override("actor_rollout_ref.model.target_modules", model_cfg.get("target_modules", ["q_proj", "v_proj"])),
+        _hydra_override(
+            "actor_rollout_ref.model.override_config.attn_implementation",
+            str(model_cfg.get("attn_implementation", "eager")),
+            append=True,
+        ),
         _hydra_override("actor_rollout_ref.actor.rollout_n", int(rollout_cfg["num_candidates"])),
         _hydra_override("actor_rollout_ref.actor.ppo_mini_batch_size", int(data_cfg["train_batch_size"])),
         _hydra_override("actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu", int(update_cfg.get("per_device_train_batch_size", 1))),
         _hydra_override("actor_rollout_ref.actor.optim.lr", float(update_cfg["learning_rate"])),
         _hydra_override("actor_rollout_ref.actor.use_kl_loss", bool(update_cfg.get("use_kl_loss", True))),
+        _hydra_override("actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu", int(update_cfg.get("ref_log_prob_micro_batch_size_per_gpu", 1))),
         _hydra_override("actor_rollout_ref.rollout.name", str(rollout_cfg.get("backend", "sglang"))),
         _hydra_override("actor_rollout_ref.rollout.load_format", str(rollout_cfg.get("load_format", "hf"))),
         _hydra_override("actor_rollout_ref.rollout.n", int(rollout_cfg["num_candidates"])),
+        _hydra_override("actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu", int(update_cfg.get("rollout_log_prob_micro_batch_size_per_gpu", 1))),
         _hydra_override("actor_rollout_ref.rollout.do_sample", True),
         _hydra_override("actor_rollout_ref.rollout.temperature", float(rollout_cfg.get("temperature", 1.0))),
         _hydra_override("actor_rollout_ref.rollout.top_p", float(rollout_cfg.get("top_p", 1.0))),
@@ -503,8 +510,9 @@ def _build_verl_overrides(
     return overrides
 
 
-def _hydra_override(key: str, value: Any) -> str:
-    return f"{key}={_format_hydra_value(value)}"
+def _hydra_override(key: str, value: Any, *, append: bool = False) -> str:
+    prefix = "+" if append else ""
+    return f"{prefix}{key}={_format_hydra_value(value)}"
 
 
 def _format_hydra_value(value: Any) -> str:

@@ -66,6 +66,34 @@ def test_grpo_input_resolution_rejects_legacy_reference_fields(tmp_path: Path) -
         raise AssertionError("expected GRPO parser to reject legacy gold_output rows")
 
 
+def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) -> None:
+    overrides = controller_grpo._build_verl_overrides(
+        config={
+            "model": {"path": "/model/default", "target_modules": ["q_proj", "v_proj"], "attn_implementation": "eager"},
+            "rollout": {"backend": "sglang", "num_candidates": 4},
+            "update": {
+                "logger": ["console"],
+                "learning_rate": 2e-4,
+                "per_device_train_batch_size": 1,
+                "ref_log_prob_micro_batch_size_per_gpu": 1,
+                "rollout_log_prob_micro_batch_size_per_gpu": 1,
+            },
+            "data": {
+                "train_batch_size": 8,
+                "val_batch_size": 4,
+                "max_prompt_length": 2048,
+                "max_response_length": 512,
+            },
+        },
+        train_dataset_path=tmp_path / "train.jsonl",
+        eval_dataset_path=tmp_path / "eval.jsonl",
+        reward_manager_path=tmp_path / "reward.py",
+    )
+    assert "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1" in overrides
+    assert "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1" in overrides
+    assert '+actor_rollout_ref.model.override_config.attn_implementation="eager"' in overrides
+
+
 def test_inspect_candidate_action_separates_parse_schema_protocol() -> None:
     protocol_bad = controller_grpo_teacher.inspect_candidate_action(
         '{"action_kind":"generate_task","task_type":"executor","task_content":"单段内容","reason":"x"}'
