@@ -241,7 +241,7 @@ PYTHONPATH=src python -m task_router_graph_train.cli.harvest_failed_badcases \
 ```bash
 cd <repo-root>
 PYTHONPATH=src python -m task_router_graph_train.cli.evaluate \
-  --predictions src/task_router_graph_train/assets/rl_v1/holdout/k20_manual_records.jsonl
+  --predictions src/task_router_graph_train/assets/rl_v1/holdout/manual_eval_records.jsonl
 ```
 
 ## Docs 导航

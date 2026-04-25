@@ -12,7 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate RL v1 predictions with module-local assets.")
     parser.add_argument(
         "--records",
-        default=str(ASSETS_ROOT / "rl_v1" / "holdout" / "k20_manual_records.jsonl"),
+        default=str(ASSETS_ROOT / "rl_v1" / "holdout" / "manual_eval_records.jsonl"),
         help="Path to the sanitized record jsonl file.",
     )
     parser.add_argument("--predictions", required=True, help="Path to the prediction jsonl file.")

@@ -1,5 +1,5 @@
 {
-  "dataset": "task_router_graph_train_eval_samples_k20_manual",
+  "dataset": "task_router_graph_train_eval_samples_manual_eval",
   "version": "v1.1.0",
   "mode": "module_local_eval_source",
   "sample_count": 20,
@@ -37,7 +37,7 @@
   "sanitization": {
     "formal_environment_only": true,
     "verifier_sidecar_enabled": true,
-    "generated_holdout_path": "src/task_router_graph_train/assets/rl_v1/holdout/k20_manual_records.jsonl"
+    "generated_holdout_path": "src/task_router_graph_train/assets/rl_v1/holdout/manual_eval_records.jsonl"
   },
   "notes": [
     "This dataset is manually authored and does not enforce mock/real distinction.",

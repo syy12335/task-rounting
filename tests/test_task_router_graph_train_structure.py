@@ -65,7 +65,7 @@ def test_agenticsearch_lab_notebook_bootstraps_repo_root() -> None:
 
 
 def test_train_module_cli_smoke(tmp_path: Path) -> None:
-    dataset_dir = TRAIN_ROOT / "assets" / "eval_samples" / "k20_manual"
+    dataset_dir = TRAIN_ROOT / "assets" / "eval_samples" / "manual_eval"
     output_root = tmp_path / "assets_out"
     output_dir = tmp_path / "reports"
     sft_output_root = tmp_path / "sft_assets"
@@ -115,9 +115,9 @@ def test_train_module_cli_smoke(tmp_path: Path) -> None:
         "-m",
         "task_router_graph_train.cli.evaluate",
         "--records",
-        str(output_root / "holdout" / "k20_manual_records.jsonl"),
+        str(output_root / "holdout" / "manual_eval_records.jsonl"),
         "--predictions",
-        str(output_root / "holdout" / "k20_manual_records.jsonl"),
+        str(output_root / "holdout" / "manual_eval_records.jsonl"),
         "--output-dir",
         str(output_dir),
     ]

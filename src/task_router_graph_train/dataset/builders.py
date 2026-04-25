@@ -46,7 +46,7 @@ ALLOWED_ROLES = {
 RAW_SAMPLE_FILE_SCENARIOS = "scenarios.jsonl"
 RAW_SAMPLE_FILE_SNAPSHOTS = "snapshots.jsonl"
 RAW_SAMPLE_FILE_LABELS = "labels.jsonl"
-DEFAULT_K20_DATASET_DIR = ASSETS_ROOT / "eval_samples" / "k20_manual"
+DEFAULT_K20_DATASET_DIR = ASSETS_ROOT / "eval_samples" / "manual_eval"
 DEFAULT_SFT_TEACHER_SOURCE_DIR = ASSETS_ROOT / "sft_v1" / "teacher_source"
 DEFAULT_SFT_OUTPUT_ROOT = ASSETS_ROOT / "sft_v1"
 RAW_SAMPLE_FILE_TEACHER_TRAIN = "teacher_train.jsonl"
@@ -260,7 +260,7 @@ def build_k20_holdout_records(
         roles=[ROLE_GRAPH_EVAL],
         reward_spec_ids=[GRAPH_EVAL_SPEC_ID],
         notes=[
-            "Built from src/task_router_graph_train/assets/eval_samples/k20_manual after stripping verifier-only environment keys.",
+            "Built from src/task_router_graph_train/assets/eval_samples/manual_eval after stripping verifier-only environment keys.",
             "runtime_shape_preview stays in verifier_sidecar and must never be fed to the model in graph_eval mode.",
         ],
     )

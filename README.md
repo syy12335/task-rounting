@@ -218,7 +218,7 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 
 - token 节省比例依赖确定性任务分布：Controller 一次分流命中的高确定性任务越多，节省越明显；README 里用 `functest / accutest / perftest` 作为示例 task family 来说明这件事。如果大多数任务都落到 executor，自然收益会变小
 - pyskill / sync skill 需要人工维护：确定性场景越多，配套脚本也越需要持续演进
-- 评测集规模还小：当前 `data/eval_samples/k20_manual` 是 20 条手工样本，覆盖 E1~E4 四类错误模式，适合机制验证，不代表全量线上分布
+- 评测集规模还小：当前 `data/eval_samples/manual_eval` 是 20 条手工样本，覆盖 E1~E4 四类错误模式，适合机制验证，不代表全量线上分布
 - 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是占位示例；迁移到其他工程场景时，需要重新定义 task type、skill 和失败治理口径
 
 ---
@@ -228,7 +228,7 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 ```text
 configs/                       # 运行配置
 data/
-  eval_samples/k20_manual/     # 评测样本（20 条，手工标注）
+  eval_samples/manual_eval/     # 评测样本（20 条，手工标注）
   archive_legacy/              # 历史数据归档
 docs/                          # 设计文档
 scripts/run/                   # CLI / case 入口

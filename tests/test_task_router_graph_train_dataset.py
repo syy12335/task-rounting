@@ -29,8 +29,8 @@ def test_sanitize_environment_payload_moves_verifier_only_fields() -> None:
 
 
 def test_build_k20_holdout_records_produces_sanitized_graph_eval_records(tmp_path: Path) -> None:
-    source_dir = ASSETS_ROOT / "eval_samples" / "k20_manual"
-    dataset_dir = tmp_path / "k20_manual"
+    source_dir = ASSETS_ROOT / "eval_samples" / "manual_eval"
+    dataset_dir = tmp_path / "manual_eval"
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     for name in ("scenarios.jsonl", "snapshots.jsonl", "labels.jsonl", "manifest.json"):

@@ -13,7 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build sanitized RL v1 assets inside the training module.")
     parser.add_argument(
         "--dataset-dir",
-        default=str(ASSETS_ROOT / "eval_samples" / "k20_manual"),
+        default=str(ASSETS_ROOT / "eval_samples" / "manual_eval"),
         help="Path to the raw manual sample source directory.",
     )
     parser.add_argument(
@@ -46,7 +46,7 @@ def main() -> None:
     holdout_dir.mkdir(parents=True, exist_ok=True)
     reward_dir.mkdir(parents=True, exist_ok=True)
 
-    write_jsonl(holdout_dir / "k20_manual_records.jsonl", records)
+    write_jsonl(holdout_dir / "manual_eval_records.jsonl", records)
     (holdout_dir / "manifest.json").write_text(
         json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
