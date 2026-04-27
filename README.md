@@ -206,6 +206,8 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 
 ## 本地 SGLang
 
+运行入口默认优先使用已就绪的本地 SGLang；若服务不可达，会快速回退到阿里云。需要让运行入口自动拉起 SGLang 时，可设置 `SGLANG_AUTO_START=1`。
+
 ```bash
 ./scripts/sglang/start.sh
 ./scripts/sglang/status.sh

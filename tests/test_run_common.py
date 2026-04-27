@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import sys
 import time
@@ -14,6 +15,24 @@ if str(RUN_SCRIPTS_ROOT) not in sys.path:
 
 
 import run_common
+
+
+def _write_provider_config(path: Path) -> None:
+    path.write_text(
+        """
+model:
+  provider: sglang
+  provider_env: MODEL_PROVIDER
+  providers:
+    aliyun:
+      name: qwen-flash
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    sglang:
+      name: qwen3-4b
+      base_url: http://127.0.0.1:30000/v1
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 class _FakeStdout(io.StringIO):
@@ -89,3 +108,63 @@ def test_with_heartbeat_degrades_without_tty(monkeypatch) -> None:
     assert "\r等待中" not in output
     assert "plain task finished in" in output
 
+
+def test_ensure_preferred_provider_defaults_to_sglang_after_auto_start(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "graph.yaml"
+    _write_provider_config(config_path)
+    availability = iter([False, True])
+
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(run_common, "SGLANG_AUTO_START", True)
+    monkeypatch.setattr(run_common, "_is_sglang_available", lambda _providers: next(availability))
+    monkeypatch.setattr(run_common, "_start_sglang_service", lambda: (True, "sglang started"))
+
+    provider, model_name, provider_env = run_common.ensure_preferred_provider_and_log(config_path)
+
+    assert provider == "sglang"
+    assert model_name == "qwen3-4b"
+    assert provider_env == "MODEL_PROVIDER"
+    assert os.environ["MODEL_PROVIDER"] == "sglang"
+
+
+def test_ensure_preferred_provider_falls_back_without_auto_start(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "graph.yaml"
+    _write_provider_config(config_path)
+    start_calls = 0
+
+    def _start() -> tuple[bool, str]:
+        nonlocal start_calls
+        start_calls += 1
+        return True, "should not be called"
+
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(run_common, "SGLANG_AUTO_START", False)
+    monkeypatch.setattr(run_common, "_is_sglang_available", lambda _providers: False)
+    monkeypatch.setattr(run_common, "_start_sglang_service", _start)
+
+    provider, model_name, provider_env = run_common.ensure_preferred_provider_and_log(config_path)
+
+    assert provider == "aliyun"
+    assert model_name == "qwen-flash"
+    assert provider_env == "MODEL_PROVIDER"
+    assert start_calls == 0
+    assert os.environ["MODEL_PROVIDER"] == "aliyun"
+
+
+def test_ensure_preferred_provider_falls_back_to_aliyun_when_sglang_cannot_start(
+    monkeypatch, tmp_path
+) -> None:
+    config_path = tmp_path / "graph.yaml"
+    _write_provider_config(config_path)
+
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(run_common, "SGLANG_AUTO_START", True)
+    monkeypatch.setattr(run_common, "_is_sglang_available", lambda _providers: False)
+    monkeypatch.setattr(run_common, "_start_sglang_service", lambda: (False, "sglang failed"))
+
+    provider, model_name, provider_env = run_common.ensure_preferred_provider_and_log(config_path)
+
+    assert provider == "aliyun"
+    assert model_name == "qwen-flash"
+    assert provider_env == "MODEL_PROVIDER"
+    assert os.environ["MODEL_PROVIDER"] == "aliyun"

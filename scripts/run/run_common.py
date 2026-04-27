@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import threading
 import time
 import json
@@ -23,6 +24,33 @@ WAIT_INDICATOR_MAX_DOTS = 6
 _OUTPUT_LOCK = threading.RLock()
 _WAIT_INDICATOR_ACTIVE = False
 _WAIT_INDICATOR_WIDTH = 0
+
+
+def _read_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+SGLANG_PROBE_TOTAL_WAIT_SEC = _read_float_env("SGLANG_PROBE_TOTAL_WAIT_SEC", 2.0)
+SGLANG_PROBE_INTERVAL_SEC = _read_float_env("SGLANG_PROBE_INTERVAL_SEC", 0.5)
+SGLANG_AUTO_START = _read_bool_env("SGLANG_AUTO_START", False)
+SGLANG_AUTO_START_READY_TIMEOUT_SEC = _read_float_env("SGLANG_AUTO_START_READY_TIMEOUT_SEC", 30.0)
+SGLANG_START_TIMEOUT_SEC = _read_float_env(
+    "SGLANG_START_TIMEOUT_SEC",
+    SGLANG_AUTO_START_READY_TIMEOUT_SEC + 5.0,
+)
 
 
 def flush_tracers() -> None:
@@ -288,14 +316,75 @@ def _is_sglang_available(providers: dict[str, Any]) -> bool:
         return False
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
-    try:
-        with socket.create_connection((host, port), timeout=1.0):
-            pass
-    except OSError:
-        return False
-
     api_key = _resolve_provider_api_key(sglang_cfg)
-    return _probe_http(base_url=base_url, api_key=api_key)
+    deadline = time.monotonic() + max(0.0, SGLANG_PROBE_TOTAL_WAIT_SEC)
+
+    while True:
+        socket_ok = False
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                socket_ok = True
+        except OSError:
+            socket_ok = False
+
+        if socket_ok and _probe_http(base_url=base_url, api_key=api_key):
+            return True
+
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(max(0.1, SGLANG_PROBE_INTERVAL_SEC))
+
+
+def _last_non_empty_line(text: str) -> str:
+    for line in reversed(str(text).splitlines()):
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _start_sglang_service() -> tuple[bool, str]:
+    script_path = PROJECT_ROOT / "scripts" / "sglang" / "start.sh"
+    if not script_path.exists():
+        return False, f"start script missing: {display_path(script_path)}"
+
+    timeout_sec = max(1.0, SGLANG_START_TIMEOUT_SEC)
+    env = os.environ.copy()
+    env.setdefault("SGLANG_READY_TIMEOUT_SEC", f"{max(1.0, SGLANG_AUTO_START_READY_TIMEOUT_SEC):g}")
+    env.setdefault("SGLANG_READY_INTERVAL_SEC", "1")
+    try:
+        completed = subprocess.run(
+            [str(script_path)],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        last_line = _last_non_empty_line(output)
+        detail = f"; last output: {last_line}" if last_line else ""
+        return False, f"start timed out after {timeout_sec:.0f}s{detail}"
+    except Exception as exc:
+        return False, f"start failed: {exc}"
+
+    output = completed.stdout or ""
+    last_line = _last_non_empty_line(output)
+    if completed.returncode == 0:
+        return True, last_line or "start script succeeded"
+    return False, last_line or f"start script exited with code {completed.returncode}"
+
+
+def _fallback_provider(providers: dict[str, Any]) -> tuple[str | None, str]:
+    if "aliyun" in providers:
+        return "aliyun", "aliyun"
+    non_sglang = [str(name) for name in providers.keys() if str(name) != "sglang"]
+    if non_sglang:
+        return non_sglang[0], non_sglang[0]
+    return None, ""
 
 
 def ensure_preferred_provider_and_log(config_path: str | Path) -> tuple[str, str, str]:
@@ -317,14 +406,30 @@ def ensure_preferred_provider_and_log(config_path: str | Path) -> tuple[str, str
         reason = f"invalid env provider, fallback to {selected}"
 
     if selected == "sglang" and not _is_sglang_available(providers):
-        if "aliyun" in providers:
-            selected = "aliyun"
-            reason = "sglang unavailable, fallback to aliyun"
+        start_detail = ""
+        if SGLANG_AUTO_START:
+            log("SGLang is not ready; trying to start local SGLang before provider fallback.")
+            started, start_detail = _start_sglang_service()
+            if started and _is_sglang_available(providers):
+                reason = f"{reason}, auto-started sglang"
+            else:
+                fallback, fallback_label = _fallback_provider(providers)
+                if fallback is not None:
+                    selected = fallback
+                    reason = (
+                        f"sglang unavailable after auto-start ({start_detail or 'not ready'}), "
+                        f"fallback to {fallback_label}"
+                    )
+                else:
+                    reason = (
+                        f"sglang unavailable after auto-start ({start_detail or 'not ready'}), "
+                        "no fallback provider"
+                    )
         else:
-            non_sglang = [name for name in providers.keys() if str(name) != "sglang"]
-            if non_sglang:
-                selected = str(non_sglang[0])
-                reason = f"sglang unavailable, fallback to {selected}"
+            fallback, fallback_label = _fallback_provider(providers)
+            if fallback is not None:
+                selected = fallback
+                reason = f"sglang unavailable, fallback to {fallback_label}"
             else:
                 reason = "sglang unavailable, no fallback provider"
 
