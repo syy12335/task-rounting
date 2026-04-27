@@ -19,6 +19,9 @@ var/reports/**
 !var/reports/.gitkeep
 outputs/
 
+# Generated post-training round assets
+src/task_router_graph_train/assets/post_training/rounds/**
+
 # Local editor
 .vscode/
 .claude/
