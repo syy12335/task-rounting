@@ -7,58 +7,34 @@ allowed-tools: ["web_search"]
 ---
 # 时间段信息查询（通用时效资讯）
 
-本 skill 以 `pyskill` 方式运行，内部采用 `Search / Refine / Verify / Answer` 四段结构：
+本文件只用于让主 `executor` 理解这个 `pyskill` 的触发语义与 worker 输入接口。
 
-- `Search`
-  - bootstrap retrieval
-  - local semantic index
-  - hybrid retrieve
-- `Refine`
-  - 候选文档去噪
-  - 证据抽取与合并
-- `Verify`
-  - `sufficient`
-  - `insufficient_continue`
-  - `insufficient_not_found`
-- `Answer`
-  - 只基于 refine 后 evidence 生成答案
+真实执行入口是 `allowed-tools` 中声明的 `web_search`。委派后会启动后台 worker graph；时间锚定、检索、精炼、验证、回答、trace 和结果格式都由 `web_search` 内部处理。
 
-实现文档与策略配置：
+主 `executor` 不需要理解或复述 worker graph 的内部流程。
 
-- worker graph 说明：`docs/graph_flow.md`
-- 检索与阶段 prompt 配置：`config/retrieval_policy.yaml`
-- 训练契约：`training/`
+## 工具接口
 
-## 必须顺序
+委派形式：
 
-1. 第一步调用 `beijing_time {}`
-2. 第二步调用 `skill_tool {"name":"web_search","input":{"query":"...","limit":...}}`
+```json
+{"action_kind":"delegate_skill","skill_name":"time-range-info","tool_name":"web_search","input":{"query":"...","limit":3},"reason":"..."}
+```
 
-禁止：
+`input` 是 JSON object：
 
-- 未完成时间锚定就检索
-- 未完成时间锚定就给出“最近/本周/上周”等结论
+- `query`：必填，表达用户检索意图；可以包含相对时间表达，以及用户关心的地域、对象或主题词。
+- `limit`：可选，默认 `3`。
+- 默认 `limit=3`；主题很宽时可用 `limit=5`。
 
-## 执行步骤
+示例：
 
-1. 获取北京时间，读取 `date`，必要时结合 `iso` 作为当前时间锚点。
-2. 将相对时间词转成绝对日期范围。
-3. 构造检索 query：主题词 + 日期线索 + 地域/对象。
-4. 调用 `web_search`。
-5. 在 `task_result` 中读取：
-   - `answer`
-   - `uncertainty`
-   - `evidence`
-   - `verify_state`
-   - `trace`
+```json
+{"query":"昨天 北京 重大事件 新闻","limit":3}
+```
 
-## 失败止损
+## 边界
 
-- 达到最大迭代轮次且 `verify_state` 仍非 `sufficient`：立即结束。
-- `verify_state=insufficient_not_found`：立即结束。
-- 脚本失败、超时、配置错误：立即结束并返回诊断信息。
-
-## 完成判定
-
-- `done`：完成时间锚定、Search / Refine / Verify / Answer 闭环
-- `failed`：关键输入缺失、证据不足、或运行失败
+- 不读取 `docs/graph_flow.md`、`config/retrieval_policy.yaml`、`training/*` 等 worker 内部文件。
+- 不基于本文件编造答案；答案由 worker 回填结果提供。
+- 输出 `delegate_skill` 后，当前 executor 回合只需要进入 `running`。

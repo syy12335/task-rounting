@@ -66,12 +66,26 @@ _EXECUTOR_OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_EXECUTOR_DELEGATE_SKILL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action_kind": {"const": "delegate_skill"},
+        "skill_name": {"type": "string", "minLength": 1},
+        "tool_name": {"type": "string", "minLength": 1},
+        "input": {"type": "object"},
+        "reason": {"type": "string", "minLength": 1},
+    },
+    "required": ["action_kind", "skill_name", "tool_name", "input", "reason"],
+    "additionalProperties": False,
+}
+
 _EXECUTOR_ACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "oneOf": [
         _EXECUTOR_OBSERVE_READ_SCHEMA,
         _EXECUTOR_OBSERVE_BEIJING_TIME_SCHEMA,
         _EXECUTOR_OBSERVE_SKILL_TOOL_SCHEMA,
+        _EXECUTOR_DELEGATE_SKILL_SCHEMA,
         {
             "type": "object",
             "properties": {
@@ -88,9 +102,10 @@ _EXECUTOR_ACTION_SCHEMA: dict[str, Any] = {
 
 _EXECUTOR_OUTPUT_CONSTRAINTS: dict[str, Any] = {
     "output_format": "json_object",
-    "action_kind_enum": ["observe", "finish"],
+    "action_kind_enum": ["observe", "delegate_skill", "finish"],
     "observe_required": ["action_kind", "tool", "args", "reason"],
     "observe_tool_enum": ["read", "beijing_time", TOOL_SKILL_TOOL],
+    "delegate_skill_required": ["action_kind", "skill_name", "tool_name", "input", "reason"],
     "finish_required": ["action_kind", "task_status", "task_result", "reason"],
     "forbid_additional_properties": True,
     "observe_tool_args_required": {
@@ -216,6 +231,20 @@ class ExecutorAgent:
                     "task_status": task_status,
                     "task_result": task_result,
                     "executor_trace": observations,
+                }
+
+            if action_kind == "delegate_skill":
+                delegated_skill = {
+                    "skill_name": str(action.get("skill_name", "")).strip(),
+                    "tool_name": str(action.get("tool_name", "")).strip(),
+                    "input": action.get("input", {}) if isinstance(action.get("input", {}), dict) else {},
+                    "reason": str(action.get("reason", "")).strip(),
+                }
+                return {
+                    "task_status": "running",
+                    "task_result": "正在执行",
+                    "executor_trace": observations,
+                    "delegated_skill": delegated_skill,
                 }
 
             tool_name = str(action.get("tool", "")).strip()

@@ -29,6 +29,7 @@ from .agents.memory import ContextCompressionOptions
 from .agents.skill_registry import (
     build_skill_registry_text,
     load_skill_catalog,
+    normalize_skill_key,
 )
 from .agents.pyskill_runtime import PYSKILL_RUNTIME
 from .agents.async_workflows import (
@@ -418,7 +419,29 @@ def _tool_skill_tool(
     return skill_runtime.run(name=tool_name, input_payload=payload)
 
 
-def _tool_read_with_skill_activation(*, workspace_root: Path, skill_runtime: SkillToolRuntime, path: str = "") -> str:
+def _tool_read_with_skill_activation(
+    *,
+    workspace_root: Path,
+    skill_runtime: SkillToolRuntime,
+    path: str = "",
+    round_skill_read_paths: set[str] | None = None,
+) -> str:
+    raw_path = str(path).strip()
+    if raw_path and Path(raw_path).name == SKILL_FILENAME and round_skill_read_paths:
+        try:
+            target = _resolve_observe_path(workspace_root=workspace_root, raw_path=raw_path)
+        except Exception:
+            target = None
+        if target is not None and str(target.resolve()) in round_skill_read_paths:
+            skill_runtime.activate_from_read_path(raw_path=raw_path)
+            return _json_dump(
+                {
+                    "skill_read_status": "already_read_in_round",
+                    "path": raw_path,
+                    "instruction": "This SKILL.md was already read in the current round. Do not read it again; continue with delegate_skill or finish.",
+                }
+            )
+
     result = _tool_read(workspace_root=workspace_root, path=path)
     if not result.startswith("ERROR:"):
         skill_runtime.activate_from_read_path(raw_path=path)
@@ -561,12 +584,133 @@ def _extract_pyskill_dispatch(executor_observations: Any) -> dict[str, Any] | No
     return None
 
 
+def _find_skill_entry_by_name(*, skill_catalog: dict[str, dict[str, Any]], skill_name: str) -> dict[str, Any] | None:
+    raw_name = str(skill_name).strip()
+    if not raw_name:
+        return None
+
+    key = normalize_skill_key(raw_name)
+    if key and key in skill_catalog:
+        return skill_catalog[key]
+
+    for entry in skill_catalog.values():
+        if str(entry.get("name", "")).strip() == raw_name:
+            return entry
+    return None
+
+
+def _dispatch_delegated_pyskill(
+    *,
+    skill_catalog: dict[str, dict[str, Any]],
+    workspace_root: Path,
+    delegated_skill: dict[str, Any],
+) -> dict[str, Any]:
+    skill_name = str(delegated_skill.get("skill_name", "")).strip()
+    tool_name = str(delegated_skill.get("tool_name", "")).strip()
+    input_payload = delegated_skill.get("input", {})
+    if not isinstance(input_payload, dict):
+        return {"accepted": False, "error": "delegate_skill.input must be a JSON object"}
+
+    skill_entry = _find_skill_entry_by_name(skill_catalog=skill_catalog, skill_name=skill_name)
+    if skill_entry is None:
+        return {"accepted": False, "error": f"delegate_skill skill not found: {skill_name!r}"}
+
+    skill_mode = str(skill_entry.get("skill_mode", "sync")).strip().lower() or "sync"
+    if skill_mode != "pyskill":
+        return {
+            "accepted": False,
+            "error": f"delegate_skill only supports skill-mode=pyskill, got {skill_mode!r} for {skill_name!r}",
+        }
+
+    allowed_tools = list(skill_entry.get("allowed_tools", []))
+    if not tool_name and len(allowed_tools) == 1:
+        tool_name = str(allowed_tools[0]).strip()
+    if tool_name not in allowed_tools:
+        return {
+            "accepted": False,
+            "error": f"delegate_skill tool {tool_name!r} is not allowed by skill {skill_name!r}; allowed_tools={allowed_tools}",
+        }
+
+    scripts_abs = skill_entry.get("scripts_abs", {})
+    script_path_abs = str(scripts_abs.get(tool_name, "")).strip() if isinstance(scripts_abs, dict) else ""
+    if not script_path_abs:
+        return {
+            "accepted": False,
+            "error": f"delegate_skill script is not configured for tool {tool_name!r} in skill {skill_name!r}",
+        }
+
+    return PYSKILL_RUNTIME.dispatch(
+        workflow_type="pyskill",
+        tool_name=tool_name,
+        skill_name=str(skill_entry.get("name", "")).strip(),
+        script_path=script_path_abs,
+        cwd=str(skill_entry.get("skill_dir_abs", workspace_root)),
+        input_payload=dict(input_payload),
+    )
+
+
 def _append_pyskill_marker_to_task_content(*, task: Task, run_id: str, pid: int) -> None:
     marker = f"[pyskill pid={pid} run_id={run_id}]"
     content = str(task.content).strip()
     if marker in content:
         return
     task.content = f"{content}\n{marker}" if content else marker
+
+
+def _build_round_skill_read_context(
+    *,
+    environment: Environment,
+    round_id: int,
+    skill_catalog: dict[str, dict[str, Any]],
+    workspace_root: Path,
+) -> dict[str, Any]:
+    skill_file_index: dict[str, dict[str, Any]] = {}
+    for entry in skill_catalog.values():
+        skill_file_abs = str(entry.get("skill_file_abs", "")).strip()
+        if skill_file_abs:
+            skill_file_index[str(Path(skill_file_abs).resolve())] = entry
+
+    round_id_value = int(round_id or environment.cur_round or 0)
+    seen: set[str] = set()
+    skills: list[dict[str, Any]] = []
+
+    for round_item in environment.rounds:
+        if int(round_item.round_id) != round_id_value:
+            continue
+        for task_item in round_item.tasks:
+            for step in task_item.track:
+                if not isinstance(step, dict):
+                    continue
+                if str(step.get("tool", "")).strip() != "read":
+                    continue
+                args = step.get("args", {})
+                raw_path = str(args.get("path", "")).strip() if isinstance(args, dict) else ""
+                if not raw_path or Path(raw_path).name != SKILL_FILENAME:
+                    continue
+                try:
+                    target = _resolve_observe_path(workspace_root=workspace_root, raw_path=raw_path)
+                except Exception:
+                    continue
+                target_key = str(target.resolve())
+                entry = skill_file_index.get(target_key)
+                if entry is None or target_key in seen:
+                    continue
+                seen.add(target_key)
+                skills.append(
+                    {
+                        "name": str(entry.get("name", "")).strip(),
+                        "path": str(entry.get("path", "")).strip(),
+                        "skill-mode": str(entry.get("skill_mode", "sync")).strip() or "sync",
+                        "allowed-tools": list(entry.get("allowed_tools", [])),
+                    }
+                )
+        break
+
+    return {
+        "round_id": round_id_value,
+        "skills": skills,
+        "instruction": "These SKILL.md files were already read in this round. Do not read them again in this round.",
+    }
 
 
 def route_node(
@@ -717,10 +861,30 @@ def executor_node(
         compress=environment_context_compress,
         compress_target_tokens=context_options.view_target_tokens,
     )
+    round_skill_reads = _build_round_skill_read_context(
+        environment=environment,
+        round_id=environment.cur_round,
+        skill_catalog=executor_catalog,
+        workspace_root=workspace_root,
+    )
+    tasks_context["round_skill_reads"] = round_skill_reads
+    round_skill_read_paths: set[str] = set()
+    for item in round_skill_reads.get("skills", []):
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("path", "")).strip()
+        if not raw_path:
+            continue
+        try:
+            round_skill_read_paths.add(str(_resolve_observe_path(workspace_root=workspace_root, raw_path=raw_path).resolve()))
+        except Exception:
+            continue
+
     recent_rounds_payload = environment.build_rounds_view(include_trace=False)
     executor_tools = _build_executor_tools(
         workspace_root=workspace_root,
         skill_runtime=skill_runtime,
+        round_skill_read_paths=round_skill_read_paths,
     )
     result = run_executor_task(
         llm=llm,
@@ -741,6 +905,72 @@ def executor_node(
 
     raw_executor_trace = result.get("executor_trace", [])
     executor_trace = _build_executor_trace(raw_executor_trace)
+    delegated_skill = result.get("delegated_skill")
+    if isinstance(delegated_skill, dict):
+        skill_name = str(delegated_skill.get("skill_name", "")).strip()
+        tool_name = str(delegated_skill.get("tool_name", "")).strip()
+        input_payload = delegated_skill.get("input", {})
+        reason = str(delegated_skill.get("reason", "")).strip()
+        executor_trace.append(
+            {
+                "agent": "executor",
+                "event": "delegate_skill",
+                "skill_name": skill_name,
+                "tool_name": tool_name,
+                "args": {"input": input_payload if isinstance(input_payload, dict) else {}},
+                "reason": reason,
+                "task_status": "running",
+                "task_result": "正在执行",
+                "return": {
+                    "skill_name": skill_name,
+                    "tool_name": tool_name,
+                    "input": input_payload if isinstance(input_payload, dict) else {},
+                },
+            }
+        )
+        dispatch_payload = _dispatch_delegated_pyskill(
+            skill_catalog=executor_catalog,
+            workspace_root=workspace_root,
+            delegated_skill=delegated_skill,
+        )
+        if bool(dispatch_payload.get("accepted", False)):
+            run_id = str(dispatch_payload.get("run_id", "")).strip()
+            try:
+                pid = int(dispatch_payload.get("pid", 0) or 0)
+            except Exception:
+                pid = 0
+            task.status = "running"
+            task.result = "正在执行"
+            if run_id:
+                _append_pyskill_marker_to_task_content(task=task, run_id=run_id, pid=pid)
+            executor_trace.append(
+                {
+                    "agent": "pyskill",
+                    "event": "dispatch_pyskill",
+                    "workflow_type": str(dispatch_payload.get("workflow_type", "pyskill")).strip() or "pyskill",
+                    "run_id": run_id,
+                    "pid": pid,
+                    "task_status": task.status,
+                    "task_result": task.result,
+                    "return": dict(dispatch_payload),
+                }
+            )
+        else:
+            task.status = "failed"
+            task.result = f"delegate_skill failed: {str(dispatch_payload.get('error', 'unknown error')).strip()}"
+            executor_trace.append(
+                {
+                    "agent": "pyskill",
+                    "event": "dispatch_pyskill_failed",
+                    "workflow_type": str(dispatch_payload.get("workflow_type", "pyskill")).strip() or "pyskill",
+                    "task_status": task.status,
+                    "task_result": task.result,
+                    "return": dict(dispatch_payload),
+                }
+            )
+            executor_trace.extend(_build_executor_track(executor="executor", event="execute", task=task))
+            return task, reply, executor_trace
+
     pyskill_dispatch = _extract_pyskill_dispatch(raw_executor_trace)
     if isinstance(pyskill_dispatch, dict):
         run_id = str(pyskill_dispatch.get("run_id", "")).strip()
@@ -986,11 +1216,17 @@ def _tool_beijing_time(**_: Any) -> str:
     return _json_dump(payload)
 
 
-def _build_executor_tools(*, workspace_root: Path, skill_runtime: SkillToolRuntime) -> dict[str, Callable[..., Any]]:
+def _build_executor_tools(
+    *,
+    workspace_root: Path,
+    skill_runtime: SkillToolRuntime,
+    round_skill_read_paths: set[str] | None = None,
+) -> dict[str, Callable[..., Any]]:
     return {
         "read": lambda **kwargs: _tool_read_with_skill_activation(
             workspace_root=workspace_root,
             skill_runtime=skill_runtime,
+            round_skill_read_paths=round_skill_read_paths,
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"}),
         ),
         "beijing_time": lambda **kwargs: _tool_beijing_time(

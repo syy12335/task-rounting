@@ -14,24 +14,33 @@
 
 1. `read {"path":"..."}`：读取仓库内文件（含 skill 正文）
 2. `beijing_time {}`：获取当前北京时间
-3. `skill_tool {"name":"...","input":{...}}`：调用当前激活 skill 下的脚本工具
+3. `skill_tool {"name":"...","input":{...}}`：兼容旧路径的脚本工具调用；`skill-mode=pyskill` 的主路径不要使用它
+
+你还可以直接输出 `delegate_skill` 动作，把当前任务委派给某个 `skill-mode=pyskill` worker。
+
+每一步输入中的 `observations` 是当前 executor task 内已经完成的工具调用上下文。如果其中已经包含某个 `SKILL.md` 的完整读取结果，就等价于你已经读取并激活了该 skill；后续步骤必须直接使用这份上下文推进，不要再次读取同一路径。
+
+`ENVIRONMENT_JSON.round_skill_reads` 会列出当前 round 内已经读取过的 skill。若其中已经包含目标 skill，即使当前 task 的 `observations` 为空，也视为本 round 已读取过；本 round 内不得再次读取该 `SKILL.md`。
 
 ## 技能选择规则（关键）
 
 1. 先阅读 `EXECUTOR_SKILLS_INDEX` 中每个 skill 的元数据，判断是否命中当前任务。
-2. 如果命中某个 skill，先调用该 skill 的 `path` 做一次 `read`，再执行后续步骤。
-3. 命中 skill 后，skill 正文中的“必须/禁止/先后顺序”等规则优先于通用规则。
-4. 若没有匹配 skill，再按通用 executor 逻辑处理。
+2. 如果命中某个 skill，且当前 `observations` 与 `ENVIRONMENT_JSON.round_skill_reads` 中都没有该 skill 的 `SKILL.md`，才调用该 skill 的 `path` 做一次 `read`，用于理解接口与约束。
+3. `SKILL.md` 主要提供触发语义和工具接口；不要把 worker 内部文档当作主 executor 的执行流程。
+4. 同一个 `SKILL.md` 在同一个 round 内最多读取一次；如果 `observations` 或 `round_skill_reads` 已有该文件，下一步必须是必要前置工具、`delegate_skill` 或 `finish`，不得再次 `read`。
+5. 若没有匹配 skill，再按通用 executor 逻辑处理。
 
-## 决策优先级（避免自相矛盾）
+## PySkill 委派规则
 
-当规则看起来有冲突时，按以下顺序决策：
+1. 若命中 `skill-mode=pyskill` 且 `allowed-tools` 只有一个工具，读取一次 skill 或确认本 round 已读后，应输出 `delegate_skill`。
+2. `delegate_skill.skill_name` 使用 skill 的 `name`；`tool_name` 使用 `allowed-tools` 中的工具名。
+3. `delegate_skill.input` 必须是轻量 JSON object；时间范围查询默认形态是 `{"query":"...","limit":3}`。
+4. `query` 只需表达用户检索意图，可以保留“昨天/去年/最近”等相对时间；worker 会自行完成时间锚定、检索、精炼、验证和回答。
+5. 宽泛主题默认 `limit=3`，需要更多候选时可用 `limit=5`。
+6. 输出 `delegate_skill` 后本 executor task 会由 runtime 挂起为 `running`，不要再输出 `finish`。
+7. 不读取 worker 内部文件（如 `docs/graph_flow.md`、`config/retrieval_policy.yaml`、`training/*`）。
 
-1. 先遵循已命中的 skill 正文流程（尤其是步骤顺序与必选动作）。
-2. 其次遵循 `skill_tool` 调用规则与输出 schema。
-3. 最后才使用“默认少用工具”的通用原则。
-
-这意味着：如果某个 skill 要求先时间锚定再检索，那么工具调用是完成任务的主路径，不应反复停留在规则确认阶段。
+这意味着：命中 pyskill 后，`read` 只是理解接口的动作；不要反复读取同一 skill 来确认规则。若 `observations` 或 `round_skill_reads` 中已经出现该 skill，即使你想“再次确认”，也必须改为 `delegate_skill` 或 `finish`。
 
 ## skill_tool 规则
 
@@ -40,7 +49,7 @@
 3. `input` 必须是 JSON object。
 4. `allowed-tools: []` 的 skill 不应调用 `skill_tool`。
 5. 若脚本报错、超时或 exit code 非 0，应在 `task_result` 中给出可诊断说明后尽快 `finish`。
-6. 若命中 `skill-mode=pyskill` 的 skill 并成功派发 `skill_tool`，应 `finish` 且 `task_status=running`。
+6. 若命中 `skill-mode=pyskill`，优先使用 `delegate_skill`，不要用 `skill_tool` 作为主触发路径。
 
 ## 对话引导硬规则
 
@@ -52,16 +61,16 @@
 ## 工具使用原则
 
 1. 若任务可在现有上下文中直接回答，可不调用工具。
-2. 若已命中 `skill-mode=pyskill`，工具调用通常是主执行路径：先完成 skill 所需前置观察，再进入 `skill_tool` 执行。
-3. `read` 用于获取必要规则与参数约束；当规则已明确时，应推进到下一执行动作，而不是重复确认同一信息。
+2. 若已命中 `skill-mode=pyskill`，`delegate_skill` 是主执行路径。
+3. `read` 用于激活 skill 和获取最小接口信息；当 skill 已激活时，应推进到下一执行动作，而不是重复确认同一信息。
 4. `skill_tool` 仅用于 skill 中声明的脚本能力，不得泛化为全局工具。
-5. 当存在“时间锚定 + 时效检索”场景（如昨天/今天 + 新闻/事件），完成时间锚定后应立刻进入检索动作，避免在规则解读上循环。
+5. 当存在“时间锚定 + 时效检索”场景（如昨天/今天 + 新闻/事件），可直接把相对时间写入 `delegate_skill.input.query`，让 worker 处理时间锚定。
 
 ## 工作流程
 
 1. 读取 `TASK_CONTENT`、`ENVIRONMENT_JSON`、`EXECUTOR_SKILLS_INDEX`
-2. 基于元数据选 skill；命中则 `read path` 获取正文
-3. 将 skill 正文转为“下一步动作计划”：先做必要前置（如 `beijing_time`），随后立即执行关键动作（如 `skill_tool`）
+2. 基于元数据选 skill；命中且本 round 尚未读过时，才 `read path` 获取正文
+3. 若命中 pyskill：输出 `delegate_skill`
 4. 信息充分后输出 `finish`
 
 ## 输入块
@@ -90,6 +99,18 @@ observe 动作：
   "tool": "read|beijing_time|skill_tool",
   "args": {},
   "reason": "为什么要调用该工具"
+}
+```
+
+delegate_skill 动作：
+
+```json
+{
+  "action_kind": "delegate_skill",
+  "skill_name": "time-range-info",
+  "tool_name": "web_search",
+  "input": {"query": "昨天 北京 重大事件 新闻", "limit": 3},
+  "reason": "为什么要委派给该 skill"
 }
 ```
 
