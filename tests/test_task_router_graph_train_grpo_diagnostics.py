@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from task_router_graph_train.eval import (
+    find_latest_grpo_checkpoint,
     parse_grpo_step_metrics,
     render_grpo_training_chart_html,
     summarize_grpo_reward_audit,
@@ -92,3 +93,19 @@ def test_write_grpo_diagnostics_writes_artifacts_and_chart(tmp_path: Path) -> No
     assert diagnostics["summary"]["step_metrics"]["last_score_mean"] == 0.25
     assert "critic/score/mean" in html
     assert "GRPO Training Diagnostics" in html
+
+
+def test_find_latest_grpo_checkpoint_detects_hf_actor_model(tmp_path: Path) -> None:
+    output_dir = tmp_path / "grpo"
+    checkpoint_dir = output_dir / "checkpoints"
+    hf_model_dir = checkpoint_dir / "global_step_11" / "actor" / "huggingface"
+    hf_model_dir.mkdir(parents=True)
+    (checkpoint_dir / "latest_checkpointed_iteration.txt").write_text("11\n", encoding="utf-8")
+    (hf_model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (hf_model_dir / "model.safetensors").write_text("", encoding="utf-8")
+
+    summary = find_latest_grpo_checkpoint(output_dir=output_dir)
+
+    assert summary["latest_step"] == 11
+    assert summary["hf_model_exists"] is True
+    assert summary["hf_model_path"] == str(hf_model_dir.resolve())

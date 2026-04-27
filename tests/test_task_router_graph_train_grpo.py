@@ -88,6 +88,10 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
                 "actor_optimizer_offload": True,
                 "ref_param_offload": True,
                 "ref_optimizer_offload": False,
+                "checkpoint_dir": str(tmp_path / "checkpoints"),
+                "max_actor_ckpt_to_keep": 1,
+                "checkpoint_save_contents": ["model", "hf_model"],
+                "checkpoint_load_contents": ["model"],
             },
             "data": {
                 "train_batch_size": 8,
@@ -111,6 +115,10 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
     assert "actor_rollout_ref.model.enable_activation_offload=true" in overrides
     assert "actor_rollout_ref.model.use_remove_padding=false" in overrides
     assert "actor_rollout_ref.model.lora_rank=0" in overrides
+    assert f'trainer.default_local_dir="{tmp_path / "checkpoints"}"' in overrides
+    assert "trainer.max_actor_ckpt_to_keep=1" in overrides
+    assert 'actor_rollout_ref.actor.checkpoint.save_contents=["model","hf_model"]' in overrides
+    assert 'actor_rollout_ref.actor.checkpoint.load_contents=["model"]' in overrides
 
 
 def test_sglang_rollout_load_format_maps_legacy_hf_to_auto(tmp_path: Path) -> None:

@@ -233,6 +233,13 @@ def train_controller_grpo(
     if not model_path:
         raise ValueError("model.path or --model-name-or-path is required")
     parallelism_warnings = _validate_verl_parallelism_config(effective_config)
+    checkpoint_dir = _resolve_grpo_checkpoint_dir(
+        config=effective_config,
+        output_dir=output_dir,
+        repo_root=repo_root,
+        round_id=round_id,
+    )
+    effective_config.setdefault("update", {})["checkpoint_dir"] = str(checkpoint_dir)
 
     input_resolution = _resolve_grpo_input_artifacts(
         round_id=round_id,
@@ -289,6 +296,7 @@ def train_controller_grpo(
         "execution_mode": "export_only" if export_only or run_verl_update is False else "direct_update",
         "runtime_config_path": to_safe_path(runtime_config_path),
         "reward_audit_path": to_safe_path(reward_audit_path),
+        "checkpoint_dir": to_safe_path(checkpoint_dir),
         "train_dataset_path": to_safe_path(dataset_paths["train_path"]),
         "eval_dataset_path": to_safe_path(dataset_paths["eval_path"]),
         "rollout_backend": str(effective_config["rollout"]["backend"]),
@@ -307,6 +315,7 @@ def train_controller_grpo(
         "config_path": to_safe_path((config_path or DEFAULT_GRPO_CONFIG_PATH).resolve()),
         "runtime_config_path": to_safe_path(runtime_config_path),
         "reward_audit_path": to_safe_path(reward_audit_path),
+        "checkpoint_dir": to_safe_path(checkpoint_dir),
         "rollout_backend": str(effective_config["rollout"]["backend"]),
         "teacher_backend": str(teacher_config["mode"]),
         "teacher_mode": str(teacher_config["mode"]),
@@ -387,6 +396,25 @@ def _resolve_grpo_input_artifacts(
         }
 
     raise ValueError("unable to resolve GRPO input artifacts")
+
+
+def _resolve_grpo_checkpoint_dir(
+    *,
+    config: dict[str, Any],
+    output_dir: Path,
+    repo_root: Path,
+    round_id: str | None,
+) -> Path:
+    update_cfg = dict(config.get("update", {}))
+    raw_checkpoint_dir = str(update_cfg.get("checkpoint_dir", "")).strip()
+    if raw_checkpoint_dir:
+        round_label = str(round_id or output_dir.name).strip()
+        checkpoint_dir = Path(raw_checkpoint_dir.format(round_id=round_label))
+    else:
+        checkpoint_dir = Path(output_dir) / "checkpoints"
+    if not checkpoint_dir.is_absolute():
+        checkpoint_dir = repo_root / checkpoint_dir
+    return checkpoint_dir.resolve()
 
 
 def _load_training_records_from_jsonl(*, train_path: Path, eval_path: Path) -> list[ControllerGrpoRecord]:
@@ -543,6 +571,9 @@ def _build_verl_overrides(
         _hydra_override("trainer.test_freq", int(update_cfg.get("test_freq", -1))),
         _hydra_override("trainer.save_freq", int(update_cfg.get("save_freq", -1))),
         _hydra_override("trainer.resume_mode", str(update_cfg.get("resume_mode", "disable"))),
+        *(_optional_hydra_override("trainer.default_local_dir", update_cfg.get("checkpoint_dir"))),
+        *(_optional_hydra_override("trainer.max_actor_ckpt_to_keep", update_cfg.get("max_actor_ckpt_to_keep"))),
+        *(_optional_hydra_override("trainer.max_critic_ckpt_to_keep", update_cfg.get("max_critic_ckpt_to_keep"))),
         _hydra_override("algorithm.adv_estimator", str(update_cfg.get("adv_estimator", "grpo"))),
         _hydra_override("algorithm.norm_adv_by_std_in_grpo", bool(update_cfg.get("norm_adv_by_std_in_grpo", True))),
         _hydra_override("data.train_files", [str(train_dataset_path.resolve())]),
@@ -576,6 +607,18 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.actor.fsdp_config.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
         _hydra_override("actor_rollout_ref.actor.fsdp_config.param_offload", bool(update_cfg.get("actor_param_offload", False))),
         _hydra_override("actor_rollout_ref.actor.fsdp_config.optimizer_offload", bool(update_cfg.get("actor_optimizer_offload", False))),
+        *(
+            _optional_hydra_override(
+                "actor_rollout_ref.actor.checkpoint.save_contents",
+                _normalize_checkpoint_contents(update_cfg.get("checkpoint_save_contents")),
+            )
+        ),
+        *(
+            _optional_hydra_override(
+                "actor_rollout_ref.actor.checkpoint.load_contents",
+                _normalize_checkpoint_contents(update_cfg.get("checkpoint_load_contents")),
+            )
+        ),
         _hydra_override("actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu", int(update_cfg.get("ref_log_prob_micro_batch_size_per_gpu", 1))),
         _hydra_override("actor_rollout_ref.ref.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
         _hydra_override("actor_rollout_ref.ref.fsdp_config.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
@@ -609,6 +652,28 @@ def _build_verl_overrides(
 def _hydra_override(key: str, value: Any, *, append: bool = False) -> str:
     prefix = "+" if append else ""
     return f"{prefix}{key}={_format_hydra_value(value)}"
+
+
+def _optional_hydra_override(key: str, value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str) and not value.strip():
+        return []
+    if isinstance(value, list) and not value:
+        return []
+    return [_hydra_override(key, value)]
+
+
+def _normalize_checkpoint_contents(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        raw_items = [str(item).strip() for item in value]
+    else:
+        raise ValueError("checkpoint contents must be a list or comma-separated string")
+    return [item for item in raw_items if item]
 
 
 def _format_hydra_value(value: Any) -> str:

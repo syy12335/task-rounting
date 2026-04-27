@@ -6,9 +6,11 @@ from pathlib import Path
 from task_router_graph_train.eval import (
     build_holdout_prediction_jobs,
     evaluate_holdout_predictions,
+    generate_holdout_predictions_from_hf_model,
     generate_holdout_predictions,
     render_metrics_summary_chart_html,
 )
+import task_router_graph_train.eval.holdout_inference as holdout_inference_module
 
 
 def test_build_holdout_prediction_jobs_keeps_sample_id_and_prompt_shape(tmp_path: Path) -> None:
@@ -77,6 +79,108 @@ def test_generate_holdout_predictions_writes_response_rows(monkeypatch, tmp_path
             "response": '{"action_kind":"observe","tool":"build_context_view","args":{"round_limit":3,"include_trace":false,"include_user_input":true,"include_task":true,"include_reply":true},"reason":"ok"}',
         }
     ]
+
+
+def test_generate_holdout_predictions_from_hf_model_writes_response_rows(monkeypatch, tmp_path: Path) -> None:
+    record_path = tmp_path / "holdout.jsonl"
+    output_path = tmp_path / "predictions.jsonl"
+    model_path = tmp_path / "checkpoint" / "actor" / "huggingface"
+    tokenizer_path = tmp_path / "tokenizer"
+    model_path.mkdir(parents=True)
+    tokenizer_path.mkdir()
+    record_path.write_text(
+        json.dumps(
+            {
+                "sample_id": "h1",
+                "state_input": {
+                    "USER_INPUT": "进展如何",
+                    "ENVIRONMENT_JSON": {"rounds": [], "cur_round": 1, "history_summary_latest": [], "history_meta_summary": ""},
+                    "SKILLS_INDEX": "[]",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class FakeContext:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeTorch:
+        cuda = FakeCuda()
+
+        @staticmethod
+        def inference_mode() -> FakeContext:
+            return FakeContext()
+
+    class FakeTensor:
+        shape = (1, 3)
+
+        def to(self, _device: str) -> "FakeTensor":
+            return self
+
+    class FakeTokenizer:
+        pad_token_id = 0
+        eos_token_id = 2
+        eos_token = "<eos>"
+
+        @classmethod
+        def from_pretrained(cls, path: Path, **_: object) -> "FakeTokenizer":
+            assert Path(path) == tokenizer_path.resolve()
+            return cls()
+
+        def __call__(self, _prompt: str, **_: object) -> dict[str, FakeTensor]:
+            return {"input_ids": FakeTensor(), "attention_mask": FakeTensor()}
+
+        def decode(self, ids: list[int], **_: object) -> str:
+            assert ids == [101, 102]
+            return '{"action_kind":"observe","tool":"build_context_view","args":{"round_limit":3,"include_trace":false,"include_user_input":true,"include_task":true,"include_reply":true},"reason":"ok"}'
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, path: Path, **_: object) -> "FakeModel":
+            assert Path(path) == model_path.resolve()
+            return cls()
+
+        def to(self, device: str) -> "FakeModel":
+            assert device == "cpu"
+            return self
+
+        def eval(self) -> None:
+            return None
+
+        def generate(self, **_: object) -> list[list[int]]:
+            return [[11, 12, 13, 101, 102]]
+
+    monkeypatch.setattr(
+        holdout_inference_module,
+        "_load_hf_generation_dependencies",
+        lambda: (FakeTorch, FakeModel, FakeTokenizer),
+    )
+
+    report = generate_holdout_predictions_from_hf_model(
+        record_path=record_path,
+        output_path=output_path,
+        model_path=model_path,
+        tokenizer_path=tokenizer_path,
+        max_tokens=128,
+        temperature=0.0,
+    )
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert report["backend"] == "local_hf"
+    assert report["count"] == 1
+    assert rows[0]["sample_id"] == "h1"
+    assert json.loads(rows[0]["response"])["action_kind"] == "observe"
 
 
 def test_generated_response_rows_are_compatible_with_evaluator(monkeypatch, tmp_path: Path) -> None:

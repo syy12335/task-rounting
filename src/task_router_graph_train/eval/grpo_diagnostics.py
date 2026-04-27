@@ -188,7 +188,61 @@ def summarize_grpo_reward_audit(audit_path: Path) -> dict[str, Any]:
     }
 
 
-def write_grpo_diagnostics(*, output_dir: Path, eval_output_dir: Path | None = None) -> dict[str, Any]:
+def find_latest_grpo_checkpoint(*, output_dir: Path, checkpoint_dir: Path | None = None) -> dict[str, Any]:
+    resolved_output = Path(output_dir).resolve()
+    resolved_checkpoint_dir = Path(checkpoint_dir).resolve() if checkpoint_dir is not None else (resolved_output / "checkpoints").resolve()
+    result: dict[str, Any] = {
+        "checkpoint_dir": str(resolved_checkpoint_dir),
+        "exists": resolved_checkpoint_dir.exists(),
+        "latest_step": None,
+        "latest_checkpoint_path": "",
+        "actor_checkpoint_path": "",
+        "hf_model_path": "",
+        "hf_model_exists": False,
+    }
+    if not resolved_checkpoint_dir.exists():
+        result["reason"] = "checkpoint_dir_missing"
+        return result
+
+    step = _read_latest_checkpoint_step(resolved_checkpoint_dir)
+    if step is None:
+        step = _find_latest_global_step(resolved_checkpoint_dir)
+    if step is None:
+        result["reason"] = "global_step_checkpoint_missing"
+        return result
+
+    latest_checkpoint_path = resolved_checkpoint_dir / f"global_step_{step}"
+    if not latest_checkpoint_path.exists():
+        fallback_step = _find_latest_global_step(resolved_checkpoint_dir)
+        if fallback_step is None:
+            result["reason"] = "latest_checkpoint_path_missing"
+            return result
+        step = fallback_step
+        latest_checkpoint_path = resolved_checkpoint_dir / f"global_step_{step}"
+
+    actor_checkpoint_path = latest_checkpoint_path / "actor"
+    hf_model_path = actor_checkpoint_path / "huggingface"
+    hf_model_exists = _is_hf_model_dir(hf_model_path)
+    result.update(
+        {
+            "latest_step": step,
+            "latest_checkpoint_path": str(latest_checkpoint_path),
+            "actor_checkpoint_path": str(actor_checkpoint_path),
+            "hf_model_path": str(hf_model_path),
+            "hf_model_exists": hf_model_exists,
+        }
+    )
+    if not hf_model_exists:
+        result["reason"] = "hf_model_missing"
+    return result
+
+
+def write_grpo_diagnostics(
+    *,
+    output_dir: Path,
+    eval_output_dir: Path | None = None,
+    checkpoint_dir: Path | None = None,
+) -> dict[str, Any]:
     resolved_output = Path(output_dir).resolve()
     diagnostics_dir = Path(eval_output_dir).resolve() if eval_output_dir is not None else resolved_output
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
@@ -198,6 +252,7 @@ def write_grpo_diagnostics(*, output_dir: Path, eval_output_dir: Path | None = N
     step_metrics = parse_grpo_step_metrics(stdout_log)
     step_summary = summarize_grpo_step_metrics(step_metrics)
     audit_summary = summarize_grpo_reward_audit(audit_path)
+    checkpoint_summary = find_latest_grpo_checkpoint(output_dir=resolved_output, checkpoint_dir=checkpoint_dir)
 
     step_metrics_path = diagnostics_dir / "grpo_step_metrics.jsonl"
     reward_audit_summary_path = diagnostics_dir / "grpo_reward_audit_summary.json"
@@ -221,11 +276,43 @@ def write_grpo_diagnostics(*, output_dir: Path, eval_output_dir: Path | None = N
         "summary": {
             "step_metrics": step_summary,
             "reward_audit": audit_summary,
+            "checkpoint": checkpoint_summary,
         },
         "step_metrics": step_metrics,
     }
     diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return diagnostics
+
+
+def _read_latest_checkpoint_step(checkpoint_dir: Path) -> int | None:
+    marker = checkpoint_dir / "latest_checkpointed_iteration.txt"
+    if not marker.exists():
+        return None
+    match = re.search(r"\d+", marker.read_text(encoding="utf-8", errors="replace"))
+    return int(match.group(0)) if match else None
+
+
+def _find_latest_global_step(checkpoint_dir: Path) -> int | None:
+    steps: list[int] = []
+    for child in checkpoint_dir.iterdir():
+        if not child.is_dir():
+            continue
+        match = re.fullmatch(r"global_step_(\d+)", child.name)
+        if match:
+            steps.append(int(match.group(1)))
+    return max(steps) if steps else None
+
+
+def _is_hf_model_dir(path: Path) -> bool:
+    if not path.is_dir() or not (path / "config.json").exists():
+        return False
+    model_files = (
+        "model.safetensors",
+        "pytorch_model.bin",
+        "model.safetensors.index.json",
+        "pytorch_model.bin.index.json",
+    )
+    return any((path / name).exists() for name in model_files)
 
 
 def render_grpo_training_chart_html(
