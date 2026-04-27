@@ -61,7 +61,7 @@ rollout:
   max_tokens: 512
   gpu_memory_utilization: 0.5
   tensor_model_parallel_size: 1
-  data_parallel_size: 4
+  data_parallel_size: 1
   max_num_batched_tokens: 8192
   max_num_seqs: 256
   load_format: hf
@@ -77,7 +77,7 @@ update:
   gradient_accumulation_steps: 4
   ref_log_prob_micro_batch_size_per_gpu: 1
   rollout_log_prob_micro_batch_size_per_gpu: 1
-  n_gpus_per_node: 4
+  n_gpus_per_node: 1
   nnodes: 1
   actor_use_torch_compile: true
   enable_activation_offload: false
@@ -95,7 +95,9 @@ update:
   norm_adv_by_std_in_grpo: true
 
 model:
-  path: /model/default/Qwen3.5-4B
+  path: /model/default/Qwen3-0.6B/Qwen3-0.6B
+  # Optional larger local model:
+  # path: /model/default/Qwen3.5-4B
   trust_remote_code: false
   lora_rank: 8
   lora_alpha: 16
@@ -125,11 +127,7 @@ sft:
   fp16: false
   gradient_checkpointing: true
   torch_empty_cache_steps: 1
-  nproc_per_node: 4
-  nnodes: 1
-  node_rank: 0
-  master_addr: 127.0.0.1
-  master_port: 29500
+  nproc_per_node: 1
 
 feedback:
   auto_sft_confidence_threshold: 0.85
