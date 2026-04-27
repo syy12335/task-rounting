@@ -181,45 +181,44 @@ def render_metrics_summary_chart_html(
         )
 
     row_count = int(metrics_summary.get("row_count", 0) or 0)
+    semantic_passed = int(metrics_summary.get("semantic_pass_count", 0) or 0)
     semantic_failed = int(metrics_summary.get("semantic_failed_count", 0) or 0)
-    metric_rows = []
+    table_rows: list[tuple[str, str, str]] = [
+        ("样本数", str(row_count), "本次进入 teacher 评测的 holdout 样本数"),
+        ("语义通过", str(semantic_passed), "teacher 判定与 gold action 等价的样本数"),
+        ("语义失败", str(semantic_failed), "会进入 badcase/回流候选的样本数"),
+    ]
     for key, label in DEFAULT_CHART_METRICS:
         raw_value = metrics_summary.get(key, 0.0)
         try:
-            value = max(0.0, min(1.0, float(raw_value)))
+            percent_text = f"{max(0.0, min(1.0, float(raw_value))) * 100:.1f}%"
         except (TypeError, ValueError):
-            value = 0.0
-        metric_rows.append((key, label, value))
+            percent_text = "0.0%"
+        table_rows.append((label, percent_text, key))
 
-    svg_height = 84 + (len(metric_rows) * 54)
-    bar_left = 170
-    bar_width = 360
     segments: list[str] = [
-        f'<div style="font-family:system-ui,sans-serif;border:1px solid #d0d7de;border-radius:16px;'
-        f'padding:16px 18px;background:#fff;color:#111827;max-width:620px;">',
-        f'<div style="font-size:18px;font-weight:700;margin-bottom:4px;">{html.escape(title)}</div>',
+        '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
+        'color:inherit;max-width:760px;">',
+        f'<div style="font-weight:700;margin:0 0 8px 0;">{html.escape(title)}</div>',
         (
-            '<div style="font-size:13px;color:#4b5563;margin-bottom:12px;">'
-            f'样本数 {row_count} · 未通过 {semantic_failed}'
-            "</div>"
+            '<table style="border-collapse:collapse;font-size:14px;min-width:520px;">'
+            '<thead><tr>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">Metric</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">Value</th>'
+            '<th style="text-align:left;padding:6px 14px;border-bottom:1px solid #d0d7de;">Meaning</th>'
+            '</tr></thead><tbody>'
         ),
-        f'<svg width="560" height="{svg_height}" viewBox="0 0 560 {svg_height}" role="img" '
-        'aria-label="holdout evaluation chart">',
-        '<rect x="0" y="0" width="560" height="{0}" rx="12" fill="#f8fafc"></rect>'.format(svg_height),
     ]
-    for index, (_key, label, value) in enumerate(metric_rows):
-        top = 34 + (index * 54)
-        width = max(0.0, min(bar_width, bar_width * value))
-        percent_text = f"{value * 100:.1f}%"
-        segments.extend(
-            [
-                f'<text x="20" y="{top}" font-size="13" fill="#111827">{html.escape(label)}</text>',
-                f'<rect x="{bar_left}" y="{top - 12}" width="{bar_width}" height="18" rx="9" fill="#e5e7eb"></rect>',
-                f'<rect x="{bar_left}" y="{top - 12}" width="{width:.2f}" height="18" rx="9" fill="#0f766e"></rect>',
-                f'<text x="{bar_left + bar_width + 12}" y="{top + 2}" font-size="12" fill="#111827">{percent_text}</text>',
-            ]
+    for index, (metric, value, meaning) in enumerate(table_rows):
+        background = "rgba(127,127,127,0.08)" if index % 2 else "transparent"
+        segments.append(
+            f'<tr style="background:{background};">'
+            f'<td style="text-align:right;padding:6px 14px;">{html.escape(metric)}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{html.escape(value)}</td>'
+            f'<td style="text-align:left;padding:6px 14px;">{html.escape(meaning)}</td>'
+            '</tr>'
         )
-    segments.append("</svg></div>")
+    segments.append("</tbody></table></div>")
     return "".join(segments)
 
 

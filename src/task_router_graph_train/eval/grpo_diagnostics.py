@@ -324,96 +324,73 @@ def render_grpo_training_chart_html(
     if not step_metrics:
         return _empty_card("暂无 GRPO step 指标。export_only 模式或 verl 日志不存在时这是正常的。")
 
-    score_points = [
-        (int(row.get("step", 0) or 0), float(row["critic/score/mean"]))
-        for row in step_metrics
-        if "critic/score/mean" in row
-    ]
-    if not score_points:
+    if not any("critic/score/mean" in row for row in step_metrics):
         return _empty_card("暂无 critic/score/mean 指标。")
 
     step_summary = summarize_grpo_step_metrics(step_metrics)
     audit_summary = audit_summary or {}
-    width = 720
-    height = 280
-    left = 56
-    right = 24
-    top = 26
-    bottom = 40
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-    min_step = min(step for step, _score in score_points)
-    max_step = max(step for step, _score in score_points)
-    x_span = max(1, max_step - min_step)
-    y_min = min(-1.0, min(score for _step, score in score_points))
-    y_max = max(1.0, max(score for _step, score in score_points))
-    y_span = max(0.001, y_max - y_min)
-
-    def x_for(step: int) -> float:
-        return left + ((step - min_step) / x_span) * plot_width
-
-    def y_for(score: float) -> float:
-        return top + ((y_max - score) / y_span) * plot_height
-
-    score_polyline = " ".join(f"{x_for(step):.2f},{y_for(score):.2f}" for step, score in score_points)
-    zero_y = y_for(0.0)
-    y_ticks = [y_min, 0.0, y_max]
-
-    cards = [
-        ("steps", str(step_summary.get("step_count", 0))),
-        ("score", f"{step_summary.get('first_score_mean', 0):.3f} -> {step_summary.get('last_score_mean', 0):.3f}"),
-        ("best", f"{step_summary.get('best_score_mean', 0):.3f}"),
-        ("clip", f"{float(step_summary.get('max_response_length_clip_ratio', 0.0)) * 100:.1f}%"),
+    summary_rows = [
+        ("step_count", step_summary.get("step_count", 0)),
+        ("score_mean", f"{step_summary.get('first_score_mean', 0):.6g} -> {step_summary.get('last_score_mean', 0):.6g}"),
+        ("score_delta", step_summary.get("score_mean_delta", "")),
+        ("best_score_mean", step_summary.get("best_score_mean", "")),
+        ("last_kl_loss", step_summary.get("last_kl_loss", "")),
+        ("last_response_length_mean", step_summary.get("last_response_length_mean", "")),
     ]
     if audit_summary:
-        cards.append(("audit", f"{int(audit_summary.get('group_count', 0) or 0)} groups"))
-        cards.append(("pass", f"{float(audit_summary.get('candidate_pass_rate', 0.0) or 0.0) * 100:.1f}%"))
-
-    segments: list[str] = [
-        '<div style="font-family:system-ui,sans-serif;border:1px solid #d0d7de;border-radius:16px;'
-        'padding:16px 18px;background:#fff;color:#111827;max-width:780px;">',
-        f'<div style="font-size:18px;font-weight:700;margin-bottom:10px;">{html.escape(title)}</div>',
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">',
-    ]
-    for label, value in cards:
-        segments.append(
-            '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:8px 10px;background:#f8fafc;min-width:82px;">'
-            f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;">{html.escape(label)}</div>'
-            f'<div style="font-size:15px;font-weight:700;">{html.escape(value)}</div>'
-            '</div>'
-        )
-    segments.extend(
-        [
-            '</div>',
-            f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="grpo score chart">',
-            f'<rect x="0" y="0" width="{width}" height="{height}" rx="14" fill="#f8fafc"></rect>',
-            f'<line x1="{left}" y1="{zero_y:.2f}" x2="{width - right}" y2="{zero_y:.2f}" stroke="#cbd5e1" stroke-dasharray="4 4"></line>',
-        ]
-    )
-    for tick in y_ticks:
-        y = y_for(tick)
-        segments.extend(
+        summary_rows.extend(
             [
-                f'<line x1="{left - 4}" y1="{y:.2f}" x2="{width - right}" y2="{y:.2f}" stroke="#e5e7eb"></line>',
-                f'<text x="14" y="{y + 4:.2f}" font-size="11" fill="#6b7280">{tick:.1f}</text>',
+                ("reward_audit_groups", audit_summary.get("group_count", 0)),
+                ("candidate_pass_rate", f"{float(audit_summary.get('candidate_pass_rate', 0.0) or 0.0) * 100:.1f}%"),
+                ("mean_candidate_reward_score", audit_summary.get("mean_candidate_reward_score", "")),
             ]
         )
+
+    segments: list[str] = [
+        '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
+        'color:inherit;max-width:920px;">',
+        f'<div style="font-weight:700;margin:0 0 8px 0;">{html.escape(title)}</div>',
+        '<table style="border-collapse:collapse;font-size:14px;margin-bottom:12px;min-width:520px;">',
+        '<thead><tr>'
+        '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">Metric</th>'
+        '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">Value</th>'
+        '</tr></thead><tbody>',
+    ]
+    for index, (metric, value) in enumerate(summary_rows):
+        background = "rgba(127,127,127,0.08)" if index % 2 else "transparent"
+        segments.append(
+            f'<tr style="background:{background};">'
+            f'<td style="text-align:right;padding:6px 14px;">{html.escape(str(metric))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{html.escape(str(value))}</td>'
+            '</tr>'
+        )
     segments.extend(
         [
-            f'<polyline points="{score_polyline}" fill="none" stroke="#0f766e" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></polyline>',
+            '</tbody></table>',
+            '<table style="border-collapse:collapse;font-size:14px;min-width:760px;">',
+            '<thead><tr>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">Step</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">critic/score/mean</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">critic/rewards/mean</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">actor/kl_loss</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">response_length/mean</th>'
+            '<th style="text-align:right;padding:6px 14px;border-bottom:1px solid #d0d7de;">perf/throughput</th>'
+            '</tr></thead><tbody>',
         ]
     )
-    for step, score in score_points:
-        segments.append(f'<circle cx="{x_for(step):.2f}" cy="{y_for(score):.2f}" r="3.5" fill="#0f766e"></circle>')
-    segments.extend(
-        [
-            f'<text x="{left}" y="{height - 14}" font-size="11" fill="#6b7280">step {min_step}</text>',
-            f'<text x="{width - right - 54}" y="{height - 14}" font-size="11" fill="#6b7280">step {max_step}</text>',
-            f'<text x="{left}" y="18" font-size="12" fill="#111827">critic/score/mean</text>',
-            '</svg>',
-            '</div>',
-        ]
-    )
+    for index, row in enumerate(step_metrics):
+        background = "rgba(127,127,127,0.08)" if index % 2 else "transparent"
+        segments.append(
+            f'<tr style="background:{background};">'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("step"))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("critic/score/mean"))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("critic/rewards/mean"))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("actor/kl_loss"))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("response_length/mean"))}</td>'
+            f'<td style="text-align:right;padding:6px 14px;">{_html_number(row.get("perf/throughput"))}</td>'
+            '</tr>'
+        )
+    segments.append("</tbody></table></div>")
     return "".join(segments)
 
 
@@ -427,6 +404,16 @@ def _parse_numeric_metrics(line: str) -> dict[str, float]:
 
 def _strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _html_number(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, int):
+        return html.escape(str(value))
+    if isinstance(value, float):
+        return html.escape(f"{value:.6g}")
+    return html.escape(str(value))
 
 
 def _empty_card(message: str) -> str:
