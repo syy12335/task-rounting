@@ -108,6 +108,47 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
     assert "actor_rollout_ref.actor.use_torch_compile=false" in overrides
     assert "actor_rollout_ref.actor.fsdp_config.param_offload=true" in overrides
     assert "actor_rollout_ref.model.enable_activation_offload=true" in overrides
+    assert "actor_rollout_ref.model.use_remove_padding=false" in overrides
+    assert "actor_rollout_ref.model.lora_rank=0" in overrides
+
+
+def test_sglang_rollout_load_format_maps_legacy_hf_to_auto(tmp_path: Path) -> None:
+    overrides = controller_grpo._build_verl_overrides(
+        config={
+            "model": {"path": "/model/default", "target_modules": ["q_proj", "v_proj"]},
+            "rollout": {"backend": "sglang", "num_candidates": 2, "load_format": "hf"},
+            "update": {"logger": ["console"], "learning_rate": 2e-4},
+            "data": {
+                "train_batch_size": 8,
+                "val_batch_size": 4,
+                "max_prompt_length": 2048,
+                "max_response_length": 512,
+            },
+        },
+        train_dataset_path=tmp_path / "train.jsonl",
+        eval_dataset_path=tmp_path / "eval.jsonl",
+        reward_manager_path=tmp_path / "reward.py",
+    )
+    assert 'actor_rollout_ref.rollout.load_format="auto"' in overrides
+
+
+def test_sglang_direct_update_rejects_lora_rank() -> None:
+    with pytest.raises(ValueError, match="does not support LoRA"):
+        controller_grpo._validate_direct_update_compatibility(
+            {"rollout": {"backend": "sglang"}, "model": {"lora_rank": 8}}
+        )
+
+
+def test_parse_verl_step_summary_extracts_score_metrics() -> None:
+    summary = controller_grpo._parse_verl_step_summary(
+        "step:3 - critic/score/mean:0.25 - critic/rewards/mean:0.25 "
+        "- actor/pg_loss:-0.01 - perf/throughput:123.4"
+    )
+    assert summary is not None
+    assert "step=3" in summary
+    assert "critic/score/mean=0.25" in summary
+    assert "actor/pg_loss=-0.01" in summary
+    assert "perf/throughput=123.4" in summary
 
 
 def test_validate_verl_parallelism_rejects_invalid_rollout_parallelism() -> None:

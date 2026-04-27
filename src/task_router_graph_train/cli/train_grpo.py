@@ -103,8 +103,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-seq-length", type=int, default=2048)
-    parser.add_argument("--lora-r", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-r", type=int, default=0)
+    parser.add_argument("--lora-alpha", type=int, default=0)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--n-gpus-per-node", type=int, default=None)
     parser.add_argument("--nnodes", type=int, default=None)
@@ -119,6 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--actor-optimizer-offload", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--ref-param-offload", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--ref-optimizer-offload", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--stream-logs", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -170,6 +171,7 @@ def main() -> None:
         actor_optimizer_offload=args.actor_optimizer_offload,
         ref_param_offload=args.ref_param_offload,
         ref_optimizer_offload=args.ref_optimizer_offload,
+        stream_logs=bool(args.stream_logs),
         export_only=bool(args.export_only),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

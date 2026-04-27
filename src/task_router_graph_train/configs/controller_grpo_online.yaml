@@ -64,7 +64,7 @@ rollout:
   data_parallel_size: 1
   max_num_batched_tokens: 8192
   max_num_seqs: 256
-  load_format: hf
+  load_format: auto
 
 update:
   backend: verl
@@ -99,9 +99,11 @@ model:
   # Optional larger local model:
   # path: /model/default/Qwen3.5-4B
   trust_remote_code: false
-  lora_rank: 8
-  lora_alpha: 16
+  # SGLang direct weight sync in the current verl/SGLang runtime is stable for full-rank updates.
+  lora_rank: 0
+  lora_alpha: 0
   lora_dropout: 0.05
+  use_remove_padding: false
   attn_implementation: eager
   target_modules:
     - q_proj
@@ -123,6 +125,9 @@ controller_state_view:
 sft:
   total_epochs: 5
   max_seq_length: 1024
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
   bf16: true
   fp16: false
   gradient_checkpointing: true

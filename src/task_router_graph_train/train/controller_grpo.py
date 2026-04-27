@@ -4,9 +4,12 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
+import sysconfig
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -155,8 +158,8 @@ def train_controller_grpo(
     gradient_accumulation_steps: int = 4,
     learning_rate: float = 2e-4,
     max_seq_length: int = 2048,
-    lora_r: int = 8,
-    lora_alpha: int = 16,
+    lora_r: int = 0,
+    lora_alpha: int = 0,
     lora_dropout: float = 0.05,
     n_gpus_per_node: int | None = None,
     nnodes: int | None = None,
@@ -171,6 +174,7 @@ def train_controller_grpo(
     actor_optimizer_offload: bool | None = None,
     ref_param_offload: bool | None = None,
     ref_optimizer_offload: bool | None = None,
+    stream_logs: bool = True,
     export_only: bool = False,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -321,11 +325,13 @@ def train_controller_grpo(
         training_report["parallelism_warnings"] = parallelism_warnings
 
     if should_run_update:
+        _validate_direct_update_compatibility(effective_config)
         training_report["update_result"] = _run_verl_training(
             output_dir=output_dir,
             hydra_overrides=overrides,
             runtime_config_path=runtime_config_path,
             repo_root=repo_root,
+            stream_logs=stream_logs,
         )
     else:
         training_report["update_result"] = {
@@ -545,8 +551,9 @@ def _build_verl_overrides(
         _hydra_override("data.filter_overlong_prompts", bool(data_cfg.get("filter_overlong_prompts", False))),
         _hydra_override("actor_rollout_ref.model.path", str(model_cfg["path"])),
         _hydra_override("actor_rollout_ref.model.trust_remote_code", bool(model_cfg.get("trust_remote_code", False))),
-        _hydra_override("actor_rollout_ref.model.lora_rank", int(model_cfg.get("lora_rank", 8))),
-        _hydra_override("actor_rollout_ref.model.lora_alpha", int(model_cfg.get("lora_alpha", 16))),
+        _hydra_override("actor_rollout_ref.model.use_remove_padding", bool(model_cfg.get("use_remove_padding", False))),
+        _hydra_override("actor_rollout_ref.model.lora_rank", int(model_cfg.get("lora_rank", 0))),
+        _hydra_override("actor_rollout_ref.model.lora_alpha", int(model_cfg.get("lora_alpha", 0))),
         _hydra_override("actor_rollout_ref.model.target_modules", model_cfg.get("target_modules", ["q_proj", "v_proj"])),
         _hydra_override(
             "actor_rollout_ref.model.override_config.attn_implementation",
@@ -568,7 +575,7 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.ref.fsdp_config.param_offload", bool(update_cfg.get("ref_param_offload", False))),
         _hydra_override("actor_rollout_ref.ref.fsdp_config.optimizer_offload", bool(update_cfg.get("ref_optimizer_offload", False))),
         _hydra_override("actor_rollout_ref.rollout.name", str(rollout_cfg.get("backend", "sglang"))),
-        _hydra_override("actor_rollout_ref.rollout.load_format", str(rollout_cfg.get("load_format", "hf"))),
+        _hydra_override("actor_rollout_ref.rollout.load_format", _normalize_rollout_load_format(rollout_cfg)),
         _hydra_override("actor_rollout_ref.rollout.n", int(rollout_cfg["num_candidates"])),
         _hydra_override("actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu", int(update_cfg.get("rollout_log_prob_micro_batch_size_per_gpu", 1))),
         _hydra_override("actor_rollout_ref.rollout.do_sample", True),
@@ -609,12 +616,162 @@ def _format_hydra_value(value: Any) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def _normalize_rollout_load_format(rollout_cfg: dict[str, Any]) -> str:
+    load_format = str(rollout_cfg.get("load_format", "auto")).strip().lower() or "auto"
+    backend = str(rollout_cfg.get("backend", "")).strip().lower()
+    if backend == "sglang" and load_format == "hf":
+        return "auto"
+    return load_format
+
+
+def _validate_direct_update_compatibility(config: dict[str, Any]) -> None:
+    rollout_backend = str(config.get("rollout", {}).get("backend", "")).strip().lower()
+    lora_rank = int(config.get("model", {}).get("lora_rank", 0) or 0)
+    if rollout_backend == "sglang" and lora_rank > 0:
+        raise ValueError(
+            "GRPO direct update with rollout.backend=sglang does not support LoRA adapter syncing "
+            "in the current verl/SGLang runtime; set model.lora_rank=0 or pass --lora-r 0."
+        )
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_GRPO_METRIC_KEYS = (
+    "critic/score/mean",
+    "critic/rewards/mean",
+    "critic/advantages/mean",
+    "actor/pg_loss",
+    "actor/kl_loss",
+    "actor/grad_norm",
+    "response_length/mean",
+    "perf/throughput",
+)
+_GRPO_ERROR_MARKERS = (
+    "Traceback",
+    "Error executing job",
+    "ERROR",
+    "ImportError:",
+    "ModuleNotFoundError:",
+    "RuntimeError:",
+    "ValueError:",
+    "CUDA error",
+    "Scheduler hit an exception",
+    "Failed to complete",
+    "Server disconnected",
+    "Worker died",
+)
+_GRPO_PHASE_MARKERS = (
+    "[validate_config]",
+    "Using dataset class:",
+    "dataset len:",
+    "Size of train dataloader:",
+    "Total training steps:",
+    "Total steps:",
+    "SGLang http server:",
+    "Loading safetensors checkpoint shards:",
+    "Capturing batches",
+    "Training Progress:",
+    "Final validation metrics:",
+)
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text).replace("\r", "\n")
+
+
+def _parse_verl_step_summary(line: str) -> str | None:
+    clean = _strip_ansi(line)
+    step_match = re.search(r"\bstep:(\d+)\b", clean)
+    if step_match is None:
+        return None
+
+    parts = [f"step={step_match.group(1)}"]
+    for key in _GRPO_METRIC_KEYS:
+        value_match = re.search(rf"{re.escape(key)}:([-+0-9.eE]+|nan|inf|-inf)", clean)
+        if value_match is not None:
+            parts.append(f"{key}={value_match.group(1)}")
+    return "[GRPO metrics] " + " ".join(parts)
+
+
+def _print_verl_log_line(line: str, *, source: str, state: dict[str, Any]) -> None:
+    clean = _strip_ansi(line)
+    for raw_line in clean.splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+
+        state[f"{source}_lines"] = int(state.get(f"{source}_lines", 0)) + 1
+        state["last_log_monotonic"] = time.monotonic()
+        state["last_log_source"] = source
+        state["last_log_line"] = text[-240:]
+
+        summary = _parse_verl_step_summary(text)
+        if summary is not None:
+            state["last_progress_monotonic"] = time.monotonic()
+            state["last_progress_line"] = summary
+            print(summary, flush=True)
+            continue
+
+        is_error = source == "stderr" and any(marker in text for marker in _GRPO_ERROR_MARKERS)
+        if is_error:
+            state["last_progress_monotonic"] = time.monotonic()
+            print(f"[GRPO {source}] {text}", flush=True)
+            continue
+
+        if any(marker in text for marker in _GRPO_PHASE_MARKERS):
+            state["last_progress_monotonic"] = time.monotonic()
+            state["last_phase"] = text[-240:]
+            print(f"[GRPO {source}] {text}", flush=True)
+
+
+def _stream_pipe_to_log(
+    pipe: Any,
+    log_handle: Any,
+    *,
+    source: str,
+    stream_logs: bool,
+    state: dict[str, Any],
+) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            log_handle.write(line)
+            log_handle.flush()
+            if stream_logs:
+                _print_verl_log_line(line, source=source, state=state)
+    finally:
+        pipe.close()
+
+
+def _print_verl_heartbeat(
+    *,
+    proc: subprocess.Popen[str],
+    state: dict[str, Any],
+    started_monotonic: float,
+) -> None:
+    now = time.monotonic()
+    last_log = float(state.get("last_log_monotonic", started_monotonic))
+    last_progress = float(state.get("last_progress_monotonic", started_monotonic))
+    elapsed = int(now - started_monotonic)
+    idle = int(now - last_log)
+    progress_idle = int(now - last_progress)
+    stdout_lines = int(state.get("stdout_lines", 0))
+    stderr_lines = int(state.get("stderr_lines", 0))
+    last_phase = str(state.get("last_phase") or state.get("last_progress_line") or state.get("last_log_line") or "")
+    print(
+        "[GRPO heartbeat] "
+        f"pid={proc.pid} elapsed={elapsed}s log_idle={idle}s progress_idle={progress_idle}s "
+        f"stdout_lines={stdout_lines} stderr_lines={stderr_lines} "
+        f"last={last_phase[-180:]}",
+        flush=True,
+    )
+
+
 def _run_verl_training(
     *,
     output_dir: Path,
     hydra_overrides: list[str],
     runtime_config_path: Path,
     repo_root: Path,
+    stream_logs: bool = True,
 ) -> dict[str, Any]:
     if importlib.util.find_spec("verl") is None:
         raise RuntimeError("verl is not installed in the current Python environment")
@@ -625,22 +782,85 @@ def _run_verl_training(
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = src_root if not existing_pythonpath else src_root + os.pathsep + existing_pythonpath
     env["TASK_ROUTER_GRPO_RUNTIME_CONFIG_PATH"] = str(runtime_config_path.resolve())
+    env.setdefault("TASK_ROUTER_MP_AUTHKEY", f"task-router-grpo-{os.getpid()}")
+    env.setdefault("HYDRA_FULL_ERROR", "1")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    _prepend_python_nvidia_library_paths(env)
 
     stdout_log = output_dir / "verl_stdout.log"
     stderr_log = output_dir / "verl_stderr.log"
-    with stdout_log.open("w", encoding="utf-8") as stdout_handle, stderr_log.open(
-        "w", encoding="utf-8"
+    proc: subprocess.Popen[str] | None = None
+    stream_state: dict[str, Any] = {
+        "stdout_lines": 0,
+        "stderr_lines": 0,
+        "last_log_monotonic": time.monotonic(),
+        "last_progress_monotonic": time.monotonic(),
+    }
+    started_monotonic = time.monotonic()
+    heartbeat_sec = 30.0
+    next_heartbeat = started_monotonic + heartbeat_sec
+
+    with stdout_log.open("w", encoding="utf-8", buffering=1) as stdout_handle, stderr_log.open(
+        "w", encoding="utf-8", buffering=1
     ) as stderr_handle:
-        proc = subprocess.Popen(
-            command,
-            cwd=repo_root,
-            env=env,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            text=True,
-            start_new_session=True,
-        )
-        returncode = proc.wait()
+        try:
+            if stream_logs:
+                print(f"[GRPO] launching verl pid via: {' '.join(command)}", flush=True)
+                print(f"[GRPO] stdout log: {to_safe_path(stdout_log)}", flush=True)
+                print(f"[GRPO] stderr log: {to_safe_path(stderr_log)}", flush=True)
+            proc = subprocess.Popen(
+                command,
+                cwd=repo_root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+            assert proc.stdout is not None
+            assert proc.stderr is not None
+            threads = [
+                threading.Thread(
+                    target=_stream_pipe_to_log,
+                    kwargs={
+                        "pipe": proc.stdout,
+                        "log_handle": stdout_handle,
+                        "source": "stdout",
+                        "stream_logs": stream_logs,
+                        "state": stream_state,
+                    },
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=_stream_pipe_to_log,
+                    kwargs={
+                        "pipe": proc.stderr,
+                        "log_handle": stderr_handle,
+                        "source": "stderr",
+                        "stream_logs": stream_logs,
+                        "state": stream_state,
+                    },
+                    daemon=True,
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+
+            while True:
+                returncode = proc.poll()
+                if returncode is not None:
+                    break
+                if stream_logs and time.monotonic() >= next_heartbeat:
+                    _print_verl_heartbeat(proc=proc, state=stream_state, started_monotonic=started_monotonic)
+                    next_heartbeat = time.monotonic() + heartbeat_sec
+                time.sleep(1.0)
+            for thread in threads:
+                thread.join(timeout=5.0)
+        except BaseException:
+            if proc is not None and proc.poll() is None:
+                _terminate_process_group(proc.pid)
+            raise
 
     if returncode != 0:
         cleanup = _terminate_process_group(proc.pid)
@@ -657,6 +877,48 @@ def _run_verl_training(
         "stdout_log": to_safe_path(stdout_log),
         "stderr_log": to_safe_path(stderr_log),
     }
+
+
+def _prepend_python_nvidia_library_paths(env: dict[str, str]) -> None:
+    library_paths: list[str] = []
+    for site_packages in _candidate_site_packages_dirs():
+        torch_lib = site_packages / "torch" / "lib"
+        if torch_lib.is_dir():
+            library_paths.append(str(torch_lib.resolve()))
+
+        nvidia_root = site_packages / "nvidia"
+        if nvidia_root.is_dir():
+            for lib_dir in sorted(nvidia_root.glob("*/lib")):
+                if lib_dir.is_dir():
+                    library_paths.append(str(lib_dir.resolve()))
+
+    if not library_paths:
+        return
+
+    existing_paths = [item for item in env.get("LD_LIBRARY_PATH", "").split(os.pathsep) if item]
+    deduped: list[str] = []
+    for item in [*library_paths, *existing_paths]:
+        if item not in deduped:
+            deduped.append(item)
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(deduped)
+
+
+def _candidate_site_packages_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("purelib", "platlib"):
+        raw_path = sysconfig.get_paths().get(key)
+        if raw_path:
+            candidates.append(Path(raw_path))
+
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates.append(Path(sys.prefix) / "lib" / version / "site-packages")
+
+    deduped: list[Path] = []
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved.is_dir() and resolved not in deduped:
+            deduped.append(resolved)
+    return deduped
 
 
 def _terminate_process_group(pgid: int, *, grace_sec: float = 5.0) -> dict[str, Any]:
@@ -768,6 +1030,7 @@ def _apply_training_overrides(
         rollout_cfg["max_num_batched_tokens"] = int(rollout_max_num_batched_tokens)
     if rollout_max_num_seqs is not None:
         rollout_cfg["max_num_seqs"] = int(rollout_max_num_seqs)
+    rollout_cfg["load_format"] = _normalize_rollout_load_format(rollout_cfg)
     config["rollout"] = rollout_cfg
 
     model_cfg = dict(config.get("model", {}))
