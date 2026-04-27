@@ -88,6 +88,7 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
                 "actor_optimizer_offload": True,
                 "ref_param_offload": True,
                 "ref_optimizer_offload": False,
+                "kl_loss_coef": 0.01,
                 "checkpoint_dir": str(tmp_path / "checkpoints"),
                 "max_actor_ckpt_to_keep": 1,
                 "checkpoint_save_contents": ["model", "hf_model"],
@@ -111,6 +112,7 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
     assert "actor_rollout_ref.rollout.tensor_model_parallel_size=2" in overrides
     assert "actor_rollout_ref.rollout.data_parallel_size=2" in overrides
     assert "actor_rollout_ref.actor.use_torch_compile=false" in overrides
+    assert "actor_rollout_ref.actor.kl_loss_coef=0.01" in overrides
     assert "actor_rollout_ref.actor.fsdp_config.param_offload=true" in overrides
     assert "actor_rollout_ref.model.enable_activation_offload=true" in overrides
     assert "actor_rollout_ref.model.use_remove_padding=false" in overrides

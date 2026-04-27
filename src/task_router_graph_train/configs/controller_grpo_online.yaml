@@ -99,7 +99,8 @@ update:
   total_epochs: 3
   train_batch_size: 8
   val_batch_size: 4
-  learning_rate: 5.0e-6
+  # 上一轮 5e-6 下 KL 持续升高，先降回保守值。
+  learning_rate: 2.0e-6
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 4
   ref_log_prob_micro_batch_size_per_gpu: 1
@@ -116,11 +117,11 @@ update:
     - console
   val_before_train: false
   test_freq: -1
-  # verl 只有 save_freq 为正数才会保存最终 checkpoint；设大值避免每步保存。
-  save_freq: 1000000
+  # 当前 round 约 11 step/epoch，按 epoch 保存，便于选择 KL 尚未跑飞的 checkpoint。
+  save_freq: 11
   # holdout 默认从这里找最新 checkpoint，路径可用 {round_id} 占位。
   checkpoint_dir: var/runs/task_router_graph_train/grpo/{round_id}/checkpoints
-  max_actor_ckpt_to_keep: 1
+  max_actor_ckpt_to_keep: 3
   # hf_model 是 holdout 直接加载 GRPO 后模型所必需的产物。
   checkpoint_save_contents:
     - model
@@ -129,6 +130,8 @@ update:
     - model
   resume_mode: disable
   use_kl_loss: true
+  # 加强 actor loss 里的 KL 约束，抑制 policy 过快偏离 SFT/reference。
+  kl_loss_coef: 0.01
   norm_adv_by_std_in_grpo: true
 
 # SFT 和 GRPO 共用的 policy model。当前 GRPO/SGLang direct update

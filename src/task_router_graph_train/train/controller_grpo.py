@@ -603,6 +603,7 @@ def _build_verl_overrides(
         _hydra_override("actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu", int(update_cfg.get("per_device_train_batch_size", 1))),
         _hydra_override("actor_rollout_ref.actor.optim.lr", float(update_cfg["learning_rate"])),
         _hydra_override("actor_rollout_ref.actor.use_kl_loss", bool(update_cfg.get("use_kl_loss", True))),
+        *(_optional_hydra_override("actor_rollout_ref.actor.kl_loss_coef", update_cfg.get("kl_loss_coef"))),
         _hydra_override("actor_rollout_ref.actor.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
         _hydra_override("actor_rollout_ref.actor.fsdp_config.use_torch_compile", bool(update_cfg.get("actor_use_torch_compile", True))),
         _hydra_override("actor_rollout_ref.actor.fsdp_config.param_offload", bool(update_cfg.get("actor_param_offload", False))),
