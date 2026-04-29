@@ -8,11 +8,19 @@ Environment-Runtime 是一个面向稳定、可复用工程流程的任务路由
 
 ---
 
-## 为什么要分层
+## 核心机制
+
+### 1. Environment：唯一状态真源与训练/推理统一口径
+
+`Environment` 是整个 graph 的共享状态载体，多轮任务、异步回填、失败重试、历史摘要和最终回复都围绕它展开。controller 运行时不直接读取杂散上下文，而是读取从 Environment 派生出的正式 view。
+
+训练侧复用同一套入口：`build_controller_state_input(...)` 会把 runtime Environment 收敛成 `{ USER_INPUT, ENVIRONMENT_JSON, SKILLS_INDEX }`。这意味着训练样本和线上 controller 推理看到的是同一种状态结构，减少“训练时一套 context、运行时另一套 context”的口径漂移。
+
+### 2. 双重截留：按任务不确定性选择执行层
 
 通用 agentic 框架会倾向于让所有输入都走完整的 agentic loop，但工程场景里很多任务的执行路径其实是固定的；README 里用测试类任务举例，只是为了把分层路由讲清楚，并不代表框架只服务测试场景。
 
-Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径，越确定的任务越早截流。
+Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径，越确定的任务越早离开高成本 LLM 路径。controller 只负责路由和结构化 task 生成，默认 `max_steps=3`；只有剩余高不确定性任务才进入完整 executor loop（默认 `max_steps=4`）。
 
 ```text
 用户输入
@@ -40,7 +48,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 
 核心直觉是：重试越多、每次 IO 带入的上下文越大，workflow 成本差异就越明显；能用确定性路径解决的任务，越早离开 agentic loop 越划算。
 
-## 各执行层的额外 LLM 消耗
+额外 LLM 消耗：
 
 说明：这里比较的是 controller 完成路由之后，不同执行层新增的 LLM 消耗；所有请求仍会先经过 controller。
 
@@ -50,29 +58,6 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 | pyskill（`skill-mode=pyskill`） | 极少 | LLM 只参与“是否启动该 skill”，实际执行由 subprocess 异步完成 |
 | sync skill（`skill-mode=sync`） | 少 | LLM 决策命中 skill，具体执行由脚本完成 |
 | executor 自由发挥 | 最多 | 进入完整 executor agentic loop（默认 `max_steps=4`） |
-
----
-
-## 核心机制
-
-### 1. Environment：唯一状态真源与训练/推理统一口径
-
-`Environment` 是整个 graph 的共享状态载体，多轮任务、异步回填、失败重试、历史摘要和最终回复都围绕它展开。controller 运行时不直接读取杂散上下文，而是读取从 Environment 派生出的正式 view。
-
-训练侧复用同一套入口：`build_controller_state_input(...)` 会把 runtime Environment 收敛成 `{ USER_INPUT, ENVIRONMENT_JSON, SKILLS_INDEX }`。这意味着训练样本和线上 controller 推理看到的是同一种状态结构，减少“训练时一套 context、运行时另一套 context”的口径漂移。
-
-### 2. 双重截留：按任务不确定性压缩 LLM 路径
-
-controller 只负责路由和结构化 task 生成，默认 `max_steps=3`。确定性越高的任务越早离开高成本 LLM 路径：`functest / accutest / perftest` 直接进入 `ThreadPoolExecutor`；命中确定性 skill 时进入 sync skill 或 `pyskill`；只有剩余高不确定性任务才进入完整 executor loop（默认 `max_steps=4`）。
-
-```text
-controller
-  ├─ deterministic dispatch
-  ├─ sync skill / pyskill
-  └─ executor loop
-```
-
-这个设计的目标不是“所有任务都 agent 化”，而是把完整 agentic loop 留给真正需要不确定性搜索的部分。
 
 ### 3. PySkill：进程级非阻塞与幂等回填
 
