@@ -4,9 +4,7 @@ Environment-Runtime 是一个面向稳定、可复用工程流程的任务路由
 
 核心设计思路是按任务不确定性做双重截留：controller 一次截留 + executor pyskill 二次截留。`functest / accutest / perftest` 只是当前仓库的占位示例 task type，用于演示高确定性任务如何更早离开高成本路径；`skill / pyskill` 属于受约束的 agentic loop；仅将剩余高不确定性任务送入自由度最高的 executor loop。这个双重截留策略一方面显著降低 token 消耗，另一方面也能大幅减少幻觉；在高确定性任务占主导的场景下，经验消耗约为 OpenClaw 的 7%。
 
-除运行时能力外，仓库还提供了面向 controller 的 SFT + GRPO 优化框架（含 badcase 回流与 round 资产主线），用于持续优化路由决策质量。当前已实现链路是 `manual_protocol_v1 -> SFT -> GRPO -> teacher_queue / annotate_queue / sft_admissions`，但 badcase 直接回流到下一轮 SFT 的设计已经过时：它会丢掉当前 policy output 这个 rejected 信号。后续训练侧会转向 `SFT warm start -> GRPO online rollout -> teacher gold answer -> preference_admissions` 的 loop，用 bad/gold pair 支撑 DPO 或后续偏好优化。
-
-训练侧也在评估 `SFT -> GRPO -> DPO -> GRPO -> DPO` 候选链路，用 `preference_admissions` 保留 bad/gold pair，避免把 badcase 只压平成下一轮 SFT 样本。
+除运行时能力外，仓库还提供了面向 controller 的后训练框架，用 `SFT warm start -> GRPO online rollout -> DPO` 的闭环持续优化路由决策质量。SFT 负责把 controller 拉到稳定的协议输入输出空间，GRPO 负责在当前 policy 上采样候选动作并暴露真实错误分布；teacher 在 rollout 后生成 gold answer / chosen response，并把它和 bad output 组成 `preference_admissions`，作为 DPO 消费的 `state_input / chosen / rejected` 训练队列。
 
 ---
 
@@ -61,7 +59,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 
 `environment` 是整个 graph 的共享状态载体。多轮任务、异步回填、失败重试和历史摘要都围绕它展开；controller 运行时读取的是从它派生出的 context view，训练侧也复用同一口径构造 `ENVIRONMENT_JSON`。
 
-仓库内置的 controller `SFT + GRPO` 也是围绕这件事设计的：小模型做长程任务时容易逐步偏离 environment 事实，SFT 先把协议输入输出对齐，GRPO 再用 badcase 持续强化“基于 environment 做下一步决策”的能力。
+仓库内置的 controller 后训练也是围绕这件事设计的：小模型做长程任务时容易逐步偏离 environment 事实，SFT 先把协议输入输出对齐，GRPO 再通过 online rollout 暴露当前 policy 的错误分布，teacher gold answer 与 bad output 组成 preference pair，用于持续强化“基于 environment 做下一步决策”的能力。
 
 ### 2. 异步非阻塞回填
 
@@ -121,53 +119,11 @@ allowed-tools: ["your_tool"]
 
 各 agent 会按角色维护上下文视图；当上下文超过 `context_window_tokens`（默认 3000）时触发摘要压缩。工具返回过大时按 `head + mid_hits + tail` 规则裁剪，尽量保留证据密度，避免原样整段灌入模型。
 
----
-
-## Graph 完整流程
-
-```text
-init
-  -> collect_workflows
-  -> (route | update)
-  -> (executor | functest | accutest | perftest)   # 当前仓的示例 task family
-  -> update
-  -> (failure_diagnose | route | pre_reply_collect)
-  -> final_reply
-  -> end
-```
-
-其中：
-
-- `collect_workflows` 优先回收已完成的异步任务，并对状态追问走快捷汇总
-- `update` 负责落盘 task / track、维护重试计数、绑定 workflow 与 source task
-- `pre_reply_collect` 是回复前的收敛守门，专门处理 pyskill 完成、超时和死进程场景
-
----
-
-## 安装
+## Quick Start
 
 ```bash
 pip install -r requirements.txt
-```
 
-## 配置
-
-主配置文件：`configs/graph.yaml`
-
-常用运行参数已经直接写在 `configs/graph.yaml` 里，并附了中文注释。
-
-建议直接打开这个文件查看：
-
-- `model` / `embedding`
-  - 默认 provider 与后端配置
-- `paths`
-  - case、run、logs、skills 根路径
-- `runtime`
-  - task turn、agent step、pyskill timeout、memory 压缩等运行参数
-
-设置模型后端：
-
-```bash
 # 阿里云百炼
 export MODEL_PROVIDER=aliyun
 export EMBEDDING_PROVIDER=aliyun
@@ -177,17 +133,23 @@ export API_KEY_Qwen=<your_key>
 export MODEL_PROVIDER=sglang
 export EMBEDDING_PROVIDER=sglang
 export SGLANG_API_KEY=EMPTY
-```
 
-## 运行
-
-```bash
 # 单次输入
 python scripts/run/run_cli.py --config configs/graph.yaml --input "帮我做一次功能测试"
 
 # 交互模式（多轮复用同一 environment）
 python scripts/run/run_cli.py --config configs/graph.yaml --interactive
+```
 
+主配置文件是 `configs/graph.yaml`，常用运行参数已经直接写在文件里并附中文注释，主要包括：
+
+- `model` / `embedding`
+- `paths`
+- `runtime`
+
+更多运行入口：
+
+```bash
 # 打印完整轨迹（含 show_environment）
 python scripts/run/run_cli_show.py --config configs/graph.yaml --input "帮我做一次功能测试"
 
@@ -225,28 +187,6 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 - 评测集规模还小：当前评测依赖 `src/task_router_graph_train/assets/manual_protocol_v1/` 的 `holdout` split，适合机制验证，不代表全量线上分布
 - 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是占位示例；迁移到其他工程场景时，需要重新定义 task type、skill 和失败治理口径
 
----
-
-## 目录结构
-
-```text
-configs/                       # 运行配置
-data/
-  archive_legacy/              # 历史数据归档
-docs/                          # 设计文档
-scripts/run/                   # CLI / case 入口
-scripts/sglang/                # SGLang 启停脚本
-src/task_router_graph/
-  agents/                      # controller / executor / diagnosis / reply / async workflow / memory
-  schema/                      # Task、Environment、Output 数据结构
-  prompt/                      # 各节点 system prompt
-  skills/                      # controller / executor skill 目录
-  graph.py                     # LangGraph 主流程
-  nodes.py                     # 节点逻辑
-src/task_router_graph_train/   # controller 的 SFT / GRPO / badcase 回流训练主线
-var/runs/                      # 运行输出
-```
-
 ## 文档
 
 - `docs/design.md`：节点职责、执行流程与分支规则
@@ -255,16 +195,13 @@ var/runs/                      # 运行输出
 - `docs/pyskill.md`：pyskill 的 dispatch / collect / link 机制
 - `docs/agent_memory.md`：memory 压缩与 environment 视图裁剪策略
 - `docs/environment.md`：environment 数据结构与 task / track 语义
-- `src/task_router_graph_train/README.md`：controller 的 environment-grounded SFT / GRPO 训练闭环
+- `src/task_router_graph_train/README.md`：controller 的 environment-grounded 后训练闭环
 - `src/task_router_graph_train/docs/grpo_dpo_loop_v1.md`：controller 的 GRPO / DPO 候选演进方案
 - `docs/data_format.md`：输入输出与样本格式
 - `docs/changelog.md`：近期更新
 
 ## 更新计划
 
-下一次训练侧更新优先落地 `GRPO online rollout -> teacher gold answer -> preference_admissions` loop：
+下一步训练侧会把 badcase 回流改成 DPO 偏好优化链路。
 
-- `SFT` 收窄为 warm start 和少量协议修补
-- `GRPO` 负责生成当前 policy 的 on-policy candidates
-- teacher 输出 gold answer / chosen response，并保留 policy bad output 作为 rejected
-- `preference_admissions` 成为 badcase 主回流对象，供 DPO 或后续偏好优化消费
+核心变化是：badcase 不再只沉淀为下一轮 SFT 的修正样本，而是和 teacher 给出的更优 action 组成同一状态下的偏好样本。DPO 会消费这些偏好样本，继续优化 controller 的 environment-grounded 决策能力。

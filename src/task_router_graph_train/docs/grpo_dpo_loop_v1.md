@@ -45,9 +45,18 @@ SFT -> GRPO -> DPO -> GRPO -> DPO -> ...
 ```text
 SFT warm start
 -> GRPO rollout / ranking
--> preference admissions
 -> DPO
 -> next GRPO
+```
+
+其中 `preference_admissions` 不是单独训练阶段。
+
+它是 `GRPO -> DPO` 之间的 DPO 数据队列：
+
+```text
+state_input
+chosen_response
+rejected_response
 ```
 
 ## Controller Contract
@@ -324,7 +333,7 @@ teacher 输出至少包含：
 主链：
 
 ```text
-teacher_queue -> annotate_queue -> teacher_decisions -> preference_admissions
+teacher_queue -> annotate_queue -> teacher_decisions -> preference_admissions -> DPO
 ```
 
 辅助链：
@@ -502,9 +511,10 @@ controller action JSON object
 manual_protocol_v1.sft
 -> SFT checkpoint
 -> GRPO round_0001
--> preference_admissions round_0001
 -> DPO round_0001
 ```
+
+`preference_admissions round_0001` 是 `GRPO round_0001 -> DPO round_0001` 之间的数据输入。
 
 GRPO sampling：
 

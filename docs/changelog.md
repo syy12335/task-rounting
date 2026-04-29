@@ -63,7 +63,7 @@
 
 1. 训练闭环从“分散入口”收口到 manifest / round 资产主线。
 2. 当前已实现链路是 `manual_protocol_v1 -> SFT -> GRPO -> teacher_queue -> annotate_queue -> sft_admissions`。
-3. badcase 直接回流到下一轮 SFT 已被标记为过时方向；后续重点转向 `GRPO online rollout -> teacher gold answer -> preference_admissions`。
+3. badcase 直接回流到下一轮 SFT 已被标记为过时方向；后续重点转向 `GRPO online rollout -> DPO`，其中 teacher gold answer 与 bad output 会组成 `preference_admissions`。
 4. `GRPO / DPO` 候选方案已形成独立文档，核心是保留 `chosen / rejected` pair，而不是把 badcase 压平成单条 SFT reference。
 5. teacher 职责当前按正式链路收口为 reward ranking、holdout 语义判等与 badcase admission 三类评判；下一阶段会增加 gold answer / preference admission 口径。
 6. 固定 holdout paired evaluation 已补齐，主指标收口到 `level_2_rate_delta / mean_quality_score_delta / fixed_count / regressed_count / bucket-level regression`。
@@ -94,12 +94,12 @@
 优先实现训练侧新回流主线：
 
 ```text
-GRPO online rollout -> teacher gold answer -> preference_admissions
+GRPO online rollout -> DPO
 ```
 
 目标：
 
 - 保留当前 policy bad output 作为 rejected
 - 生成 teacher gold answer / chosen response
-- 形成可供 DPO 或后续偏好优化消费的 pair 数据
+- 写入 `preference_admissions`，形成 DPO 可消费的 pair 数据
 - 将 `sft_admissions` 收窄为 warm start 补充与协议修补
