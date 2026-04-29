@@ -198,6 +198,7 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 - `docs/pyskill.md`：pyskill 的 dispatch / collect / link 机制
 - `docs/agent_memory.md`：memory 压缩与 environment 视图裁剪策略
 - `docs/environment.md`：environment 数据结构与 task / track 语义
+- `docs/track.md`：track 写入链路、trace 暴露策略与 agent 间状态共享
 - `src/task_router_graph_train/README.md`：controller 的 environment-grounded 后训练闭环
 - `src/task_router_graph_train/docs/grpo_dpo_loop_v1.md`：controller 的 GRPO / DPO 候选演进方案
 - `docs/data_format.md`：输入输出与样本格式
@@ -208,3 +209,5 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 下一步训练侧会把 badcase 回流改成 DPO 偏好优化链路。
 
 核心变化是：badcase 不再只沉淀为下一轮 SFT 的修正样本，而是和 teacher 给出的更优 action 组成同一状态下的偏好样本。DPO 会消费这些偏好样本，继续优化 controller 的 environment-grounded 决策能力。
+
+运行时侧会继续细化 Environment 中的 trace / track 实现，重点补齐更稳定的事件结构、视图裁剪和排障读取口径。

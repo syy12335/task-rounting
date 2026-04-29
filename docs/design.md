@@ -5,6 +5,7 @@
 - Skill 机制：`docs/skills.md`
 - Skill Runtime 细节：`docs/skills_runtime.md`
 - Environment 设计：`docs/environment.md`
+- Track 机制：`docs/track.md`
 - Agent Memory 与视图压缩：`docs/agent_memory.md`
 - 数据格式：`docs/data_format.md`
 - 近期更新：`docs/changelog.md`

@@ -81,6 +81,8 @@
 
 ## 4. Track 约定
 
+完整链路见 `docs/track.md`。本节只保留 Environment 层面的字段口径。
+
 ### 4.1 controller 步骤（示例）
 
 - observe：
