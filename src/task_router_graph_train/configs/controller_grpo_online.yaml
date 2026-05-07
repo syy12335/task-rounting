@@ -136,12 +136,10 @@ update:
   kl_loss_coef: 0.01
   norm_adv_by_std_in_grpo: true
 
-# SFT 和 GRPO 共用的 policy model。当前 GRPO/SGLang direct update
-# 使用 full-rank 权重同步，因此这条路径保持 model.lora_rank=0。
+# SFT 和 GRPO 共用的 policy model。通过 --model-name-or-path 或本地
+# 私有配置显式传入路径，避免在仓库配置里固定机器相关路径。
 model:
-  path: /model/default/Qwen3-0.6B/Qwen3-0.6B
-  # 可选的本地更大模型：
-  # path: /model/default/Qwen3.5-4B
+  path: ""
   trust_remote_code: false
   # 当前 verl/SGLang runtime 的 direct weight sync 在 full-rank update 下更稳定。
   lora_rank: 0

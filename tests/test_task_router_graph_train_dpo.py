@@ -90,7 +90,7 @@ def test_train_dpo_missing_dependencies_has_clear_error(monkeypatch, tmp_path: P
 
     with pytest.raises(RuntimeError, match="DPO training dependencies"):
         controller_dpo.train_controller_dpo(
-            model_name_or_path="/model/default",
+            model_name_or_path="models/default",
             preference_admissions=preference_path,
             allow_unsafe_path_input=True,
             output_dir=tmp_path / "out",

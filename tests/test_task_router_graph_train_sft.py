@@ -58,7 +58,7 @@ def test_train_controller_sft_multi_gpu_launches_before_loading_training_deps(mo
         lambda **kwargs: {"launcher": {"nproc_per_node": kwargs["nproc_per_node"]}, "output_dir": str(kwargs["output_dir"])},
     )
     report = controller_sft.train_controller_sft(
-        model_name_or_path="/model/default",
+        model_name_or_path="models/default",
         lora_target_modules=["q_proj", "v_proj"],
         output_dir=tmp_path,
         nproc_per_node=2,
@@ -68,7 +68,7 @@ def test_train_controller_sft_multi_gpu_launches_before_loading_training_deps(mo
 
 def test_build_distributed_launch_command_uses_torchrun_module(tmp_path: Path) -> None:
     command = controller_sft._build_distributed_launch_command(
-        model_name_or_path="/model/default",
+        model_name_or_path="models/default",
         lora_target_modules=["q_proj", "v_proj"],
         train_examples=None,
         eval_examples=None,

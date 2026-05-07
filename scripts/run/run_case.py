@@ -11,16 +11,28 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from run_common import (
-    display_path,
-    ensure_preferred_provider_and_log,
-    flush_tracers,
-    log,
-    print_cli_line,
-    persist_run_result,
-    serialize_run_result,
-    with_heartbeat,
-)
+try:
+    from .run_common import (
+        display_path,
+        ensure_preferred_provider_and_log,
+        flush_tracers,
+        log,
+        print_cli_line,
+        persist_run_result,
+        serialize_run_result,
+        with_heartbeat,
+    )
+except ImportError:
+    from run_common import (
+        display_path,
+        ensure_preferred_provider_and_log,
+        flush_tracers,
+        log,
+        print_cli_line,
+        persist_run_result,
+        serialize_run_result,
+        with_heartbeat,
+    )
 
 
 def main() -> None:

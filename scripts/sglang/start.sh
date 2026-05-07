@@ -6,7 +6,7 @@ LOG_DIR="${SGLANG_LOG_DIR:-$ROOT_DIR/var/logs}"
 LOG_FILE="${SGLANG_LOG_FILE:-$LOG_DIR/sglang.log}"
 PID_FILE="${SGLANG_PID_FILE:-$ROOT_DIR/var/sglang.pid}"
 
-MODEL_PATH="${SGLANG_MODEL_PATH:-/model/default/Qwen3-4B/Qwen3-4B}"
+MODEL_PATH="${SGLANG_MODEL_PATH:-}"
 SERVED_MODEL_NAME="${SGLANG_SERVED_MODEL_NAME:-qwen3-4b}"
 HOST="${SGLANG_HOST:-127.0.0.1}"
 PORT="${SGLANG_PORT:-30000}"
@@ -18,6 +18,11 @@ CPU_CORES="${SGLANG_CPU_CORES:-}"
 NICE_LEVEL="${SGLANG_NICE_LEVEL:-10}"
 
 mkdir -p "$LOG_DIR" "$(dirname "$PID_FILE")"
+
+if [[ -z "$MODEL_PATH" ]]; then
+  echo "SGLANG_MODEL_PATH is required; set it to a local model directory." >&2
+  exit 1
+fi
 
 if [[ -f "$PID_FILE" ]]; then
   OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"

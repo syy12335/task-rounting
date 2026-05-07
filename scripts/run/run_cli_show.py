@@ -16,16 +16,28 @@ from task_router_graph.token_usage import (
     empty_token_usage_summary,
     merge_token_usage_summary,
 )
-from run_common import (
-    display_path,
-    ensure_preferred_provider_and_log,
-    flush_tracers,
-    log,
-    print_cli_line,
-    persist_run_result,
-    serialize_run_result,
-    with_heartbeat,
-)
+try:
+    from .run_common import (
+        display_path,
+        ensure_preferred_provider_and_log,
+        flush_tracers,
+        log,
+        print_cli_line,
+        persist_run_result,
+        serialize_run_result,
+        with_heartbeat,
+    )
+except ImportError:
+    from run_common import (
+        display_path,
+        ensure_preferred_provider_and_log,
+        flush_tracers,
+        log,
+        print_cli_line,
+        persist_run_result,
+        serialize_run_result,
+        with_heartbeat,
+    )
 
 
 def _resolve_input(args: argparse.Namespace) -> str:

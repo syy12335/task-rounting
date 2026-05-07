@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "environment-runtime"
+version = "0.1.0"
+description = "Environment-grounded task routing runtime with async skills and controller post-training workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "syy12335" },
+]
+keywords = [
+  "agent",
+  "langgraph",
+  "task-routing",
+  "skills",
+  "post-training",
+  "grpo",
+  "dpo",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+  "PyYAML>=6.0.1",
+  "langchain-core>=0.3.79,<0.4.0",
+  "langchain>=0.3.0,<0.4.0",
+  "langgraph>=0.2.0,<0.3.0",
+  "langchain-openai>=0.3.0,<0.4.0",
+  "jsonschema>=4.23.0",
+  "defusedxml>=0.7.1",
+  "cachetools>=5.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+]
+post-training = [
+  "torch>=2.2",
+  "transformers>=4.40",
+  "peft>=0.10",
+  "accelerate>=0.29",
+  "sentencepiece>=0.2",
+  "datasets>=2.19",
+  "trl>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/syy12335/task-rounting"
+Repository = "https://github.com/syy12335/task-rounting"
+Issues = "https://github.com/syy12335/task-rounting/issues"
+
+[project.scripts]
+environment-runtime = "scripts.run.run_cli:main"
+environment-runtime-show = "scripts.run.run_cli_show:main"
+environment-runtime-case = "scripts.run.run_case:main"
+environment-runtime-cases = "scripts.run.run_cases:main"
+task-router-train-sft = "task_router_graph_train.cli.train_sft:main"
+task-router-train-grpo = "task_router_graph_train.cli.train_grpo:main"
+task-router-train-dpo = "task_router_graph_train.cli.train_dpo:main"
+task-router-prepare-round = "task_router_graph_train.cli.prepare_round:main"
+task-router-evaluate = "task_router_graph_train.cli.evaluate:main"
+task-router-annotate-queue = "task_router_graph_train.cli.annotate_queue:main"
+
+[tool.setuptools]
+py-modules = ["sitecustomize"]
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["task_router_graph*", "task_router_graph_train*", "scripts*"]
+exclude = ["tests*", "docs*", "var*"]
+
+[tool.setuptools.package-data]
+task_router_graph = [
+  "prompt/**/*.md",
+  "skills/**/*.md",
+  "skills/**/*.yaml",
+  "skills/**/*.json",
+  "skills/**/*.schema.json",
+]
+task_router_graph_train = [
+  "README.md",
+  "assets/**/*.json",
+  "assets/**/*.jsonl",
+  "assets/**/*.md",
+  "configs/**/*.yaml",
+  "configs/**/*.json",
+  "docs/**/*.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

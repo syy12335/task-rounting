@@ -31,6 +31,8 @@ hf-cache
 model-cache
 *.log
 .pyskill_runtime/
+*.egg-info/
+build/
 
 # Private local docs
 .private/

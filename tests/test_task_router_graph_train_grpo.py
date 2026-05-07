@@ -72,7 +72,7 @@ def test_grpo_input_resolution_rejects_legacy_reference_fields(tmp_path: Path) -
 def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) -> None:
     overrides = controller_grpo._build_verl_overrides(
         config={
-            "model": {"path": "/model/default", "target_modules": ["q_proj", "v_proj"], "attn_implementation": "eager"},
+            "model": {"path": "models/default", "target_modules": ["q_proj", "v_proj"], "attn_implementation": "eager"},
             "rollout": {"backend": "sglang", "num_candidates": 4, "tensor_model_parallel_size": 2, "data_parallel_size": 2},
             "update": {
                 "logger": ["console"],
@@ -126,7 +126,7 @@ def test_verl_overrides_include_ref_log_prob_micro_batch_size(tmp_path: Path) ->
 def test_sglang_rollout_load_format_maps_legacy_hf_to_auto(tmp_path: Path) -> None:
     overrides = controller_grpo._build_verl_overrides(
         config={
-            "model": {"path": "/model/default", "target_modules": ["q_proj", "v_proj"]},
+            "model": {"path": "models/default", "target_modules": ["q_proj", "v_proj"]},
             "rollout": {"backend": "sglang", "num_candidates": 2, "load_format": "hf"},
             "update": {"logger": ["console"], "learning_rate": 2e-4},
             "data": {

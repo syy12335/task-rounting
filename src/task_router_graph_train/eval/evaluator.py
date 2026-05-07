@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -244,16 +245,23 @@ def _enqueue_failed_badcases(
             "queued_count": 0,
             "teacher_queue_count": 0,
         }
-    temp_path = Path("/tmp/task_router_graph_train_holdout_badcases.jsonl").resolve()
-    temp_path.write_text(
-        "\n".join(json.dumps(row, ensure_ascii=False) for row in candidates) + "\n",
+    with tempfile.NamedTemporaryFile(
+        "w",
         encoding="utf-8",
-    )
-    return enqueue_teacher_queue(
-        round_id=badcase_round_id,
-        round_manifest=badcase_round_manifest,
-        candidates_path=temp_path,
-    )
+        prefix="task_router_graph_train_holdout_badcases_",
+        suffix=".jsonl",
+        delete=False,
+    ) as temp_file:
+        temp_path = Path(temp_file.name).resolve()
+        temp_file.write("\n".join(json.dumps(row, ensure_ascii=False) for row in candidates) + "\n")
+    try:
+        return enqueue_teacher_queue(
+            round_id=badcase_round_id,
+            round_manifest=badcase_round_manifest,
+            candidates_path=temp_path,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
