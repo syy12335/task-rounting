@@ -147,7 +147,7 @@ export EMBEDDING_PROVIDER=aliyun
 export API_KEY_Qwen=<your_key>
 
 # 可选：改用本地 SGLang
-# export SGLANG_MODEL_PATH=/path/to/Qwen3-4B
+# export SGLANG_MODEL_PATH=path/to/Qwen3-4B
 # export SGLANG_SERVED_MODEL_NAME=qwen3-4b
 # export SGLANG_API_KEY=EMPTY
 # ./scripts/sglang/start.sh
@@ -160,11 +160,13 @@ export API_KEY_Qwen=<your_key>
 # ./scripts/sglang/stop.sh
 
 # 交互模式（多轮复用同一 environment）
-environment-runtime --config configs/graph.yaml --interactive
+python scripts/run/run_cli.py --config configs/graph.yaml --interactive
 
 # 可选：单次输入
-# environment-runtime --config configs/graph.yaml --input "帮我做一次功能测试"
+# python scripts/run/run_cli.py --config configs/graph.yaml --input "帮我做一次功能测试"
 ```
+
+安装后也可以使用简写命令：`environment-runtime`、`environment-runtime-show`、`environment-runtime-case`、`environment-runtime-cases`。
 
 主配置文件是 `configs/graph.yaml`，常用运行参数已经直接写在文件里并附中文注释，主要包括：
 
@@ -176,13 +178,13 @@ environment-runtime --config configs/graph.yaml --interactive
 
 ```bash
 # 打印完整轨迹（含 show_environment）
-environment-runtime-show --config configs/graph.yaml --input "帮我做一次功能测试"
+python scripts/run/run_cli_show.py --config configs/graph.yaml --input "帮我做一次功能测试"
 
 # 运行单个 case（使用你自己的 case.json）
-environment-runtime-case --config configs/graph.yaml --case /path/to/case.json
+python scripts/run/run_case.py --config configs/graph.yaml --case path/to/case.json
 
 # 批量运行（目录内需要是 case json 文件）
-environment-runtime-cases --config configs/graph.yaml --cases-dir /path/to/cases_dir
+python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir path/to/cases_dir
 
 ```
 

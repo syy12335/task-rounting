@@ -146,7 +146,7 @@ export EMBEDDING_PROVIDER=aliyun
 export API_KEY_Qwen=<your_key>
 
 # Optional: use local SGLang
-# export SGLANG_MODEL_PATH=/path/to/Qwen3-4B
+# export SGLANG_MODEL_PATH=path/to/Qwen3-4B
 # export SGLANG_SERVED_MODEL_NAME=qwen3-4b
 # export SGLANG_API_KEY=EMPTY
 # ./scripts/sglang/start.sh
@@ -159,11 +159,13 @@ export API_KEY_Qwen=<your_key>
 # ./scripts/sglang/stop.sh
 
 # Interactive mode: reuse one environment across turns
-environment-runtime --config configs/graph.yaml --interactive
+python scripts/run/run_cli.py --config configs/graph.yaml --interactive
 
 # Optional: single input
-# environment-runtime --config configs/graph.yaml --input "Run a functional test for me"
+# python scripts/run/run_cli.py --config configs/graph.yaml --input "Run a functional test for me"
 ```
+
+After installation, shorthand console commands are also available: `environment-runtime`, `environment-runtime-show`, `environment-runtime-case`, and `environment-runtime-cases`.
 
 The main config file is `configs/graph.yaml`. Common runtime settings are documented directly in the file, including:
 
@@ -175,13 +177,13 @@ More entry points:
 
 ```bash
 # Print the full trace, including show_environment
-environment-runtime-show --config configs/graph.yaml --input "Run a functional test for me"
+python scripts/run/run_cli_show.py --config configs/graph.yaml --input "Run a functional test for me"
 
 # Run one case with your own case.json
-environment-runtime-case --config configs/graph.yaml --case /path/to/case.json
+python scripts/run/run_case.py --config configs/graph.yaml --case path/to/case.json
 
 # Run a directory of case json files
-environment-runtime-cases --config configs/graph.yaml --cases-dir /path/to/cases_dir
+python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir path/to/cases_dir
 ```
 
 Run outputs are written by default to `var/runs/run_YYYYMMDD_HHMMSS/environment.json`.

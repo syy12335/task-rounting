@@ -22,11 +22,11 @@ notebook 的 GRPO 节点会在训练结束后解析 `verl_stdout.log`、`reward_
 默认长任务都有开关，优先改 `controller_grpo_online.yaml` 里的 `run` 段。本机模型路径可以直接设置环境变量：
 
 ```bash
-export BASE_MODEL=/path/to/base_model
+export BASE_MODEL=path/to/base_model
 ```
 
 如果要使用另一份配置：
 
 ```bash
-export POST_TRAINING_RUN_CONFIG=/path/to/controller_grpo_online.yaml
+export POST_TRAINING_RUN_CONFIG=path/to/controller_grpo_online.yaml
 ```

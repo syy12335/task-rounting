@@ -26,9 +26,9 @@
 - `python -m task_router_graph_train.cli.prepare_round --round-id round_0001`
 - `python -m task_router_graph_train.cli.train_sft --model-name-or-path ... --lora-target-modules ...`（只用于最早 warm start）
 - `python -m task_router_graph_train.cli.train_grpo --config src/task_router_graph_train/configs/controller_grpo_online.yaml`
-- `python -m task_router_graph_train.cli.evaluate --predictions /path/to/predictions.jsonl`
+- `python -m task_router_graph_train.cli.evaluate --predictions path/to/predictions.jsonl`
 - `python -m task_router_graph_train.cli.annotate_queue --round-id round_0001`
-- `python -m task_router_graph_train.cli.train_dpo --model-name-or-path /path/to/grpo/checkpoint`
+- `python -m task_router_graph_train.cli.train_dpo --model-name-or-path path/to/grpo/checkpoint`
 
 `annotate_queue` 生成 `teacher_decisions` 和 `preference_admissions`。teacher 接纳 badcase 时必须同时生成 gold case；当前 policy bad output 作为 rejected 保留 raw text 和 parsed action。
 
