@@ -2,11 +2,34 @@
 
 [中文](README.md) | English
 
-Environment-Runtime is a task routing framework for stable and reusable engineering workflows. It targets the basic needs behind OpenClaw-style environments, with very low token usage in stable engineering scenarios, smoother waiting behavior, and more reliable Skill engineering support.
+[![Tests](https://github.com/syy12335/task-rounting/actions/workflows/tests.yml/badge.svg)](https://github.com/syy12335/task-rounting/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-The core idea is a two-stage interception strategy based on task uncertainty: controller interception first, then executor pyskill interception. `functest / accutest / perftest` are placeholder task types in this repository, used to demonstrate how high-certainty tasks can leave the expensive path early. `skill / pyskill` are constrained agentic loops, while only the remaining high-uncertainty tasks go to the most flexible executor loop. In high-certainty task distributions, the observed token cost is about 7% of the OpenClaw-style baseline.
+Environment-Runtime is a task routing runtime for engineering agents. It routes high-certainty tasks to fixed workflows / skills early, leaves low-certainty tasks to a full executor loop, and supports async long-running work with structured result collection.
 
-Besides the runtime, this repository also includes a controller post-training framework. The current training path is `manual_protocol_v1 -> SFT warm start -> GRPO -> teacher_queue / annotate_queue -> preference_admissions -> DPO -> next GRPO ...`. It is used to improve environment-grounded controller decisions. When the teacher accepts a badcase, it creates a gold case under the same state; the gold output and the current policy bad output form a `chosen / rejected` preference pair, which is then used by DPO to further optimize the controller.
+It is useful when:
+
+- Most tasks are stable engineering workflows, such as tests, evaluations, inspections, retrieval, batch jobs, or pre-release checks
+- Some tasks can be handled by fixed scripts or workflows, while an agent still handles routing, clarification, summarization, and failure recovery
+- You want the controller to make decisions from explicit Environment state, instead of hidden context or the full trace by default
+- Long-running tasks should return `running` first, then fill results back through process-level skills / workflows
+
+It is not a good fit when:
+
+- Almost every request needs open-ended reasoning and there are few deterministic workflows to extract
+- You only need a chatbot and do not need structured tasks, Environment state, track logs, or a training loop
+- You need ready-made business task types. The built-in `functest / accutest / perftest` types are examples and should be replaced in real deployments.
+
+## Advantages
+
+- **Observed token cost is about 7%**: on a distribution dominated by high-certainty tasks, stable tasks do not need to run through the full agentic loop every time; compared with an OpenClaw-style baseline, the observed cost is about 7%.
+- **Less idle waiting**: long-running tasks can return `running` first and fill results back asynchronously, instead of blocking one synchronous agent turn.
+- **Less room for hallucination**: the controller makes decisions from an explicit Environment view, reducing hidden-context assumptions and invented facts.
+- **More reusable engineering paths**: scripts, workflows, and skills can become fixed execution paths over time, while the agent handles routing and failure convergence.
+- **Easier badcase review**: tasks, failures, retries, async collection, and final replies all leave structured traces for locating controller / executor / skill issues.
+
+These benefits depend on task distribution. The more deterministic workflows you have, the stronger the payoff; if most requests are open-ended reasoning tasks, it behaves closer to a normal executor agent. The repository still needs a reproducible benchmark, so treat it as a mechanism validation and extension point rather than a polished benchmark claim.
 
 ---
 
@@ -70,7 +93,15 @@ Process management details:
 - `pre_reply_collect` checks dead processes, timed-out tasks, and lost handles before every reply, then converges them to `failed`
 - When a result is collected, the graph creates a `pyskill_task` and links the source task's `result` back to `pyskill_task(round_id=..., task_id=...)`
 
-### 4. Controller GRPO reward: prioritize visible-state grounding
+### 4. Controller post-training: data feedback loop
+
+Controller post-training is built around the same Environment state protocol. It forms one continuous feedback loop from base protocol samples, on-policy rollouts, and badcase filtering to preference optimization:
+
+```text
+manual_protocol_v1 -> SFT warm start -> GRPO -> holdout evaluate -> teacher_queue / annotate_queue -> preference_admissions -> DPO -> next GRPO ...
+```
+
+SFT first pulls the controller into a stable protocol input/output space. GRPO samples candidate actions from the current policy and exposes the real error distribution. When the teacher accepts a badcase, it creates a same-state gold case; the gold output and the current policy bad output become a `chosen / rejected` preference pair, enter `preference_admissions`, and are then consumed by DPO to keep improving the controller before the next GRPO round.
 
 The controller post-training reward is not only about whether the output looks like the gold action. It gives the highest weight to whether the decision is grounded in the visible state:
 
@@ -103,7 +134,7 @@ Rollup does not blindly compress all history. Rounds related to `running` tasks,
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 
 # Optional: controller post-training dependencies
 # for SFT / GRPO / DPO. CUDA environments must match verl + SGLang.
@@ -128,10 +159,10 @@ export API_KEY_Qwen=<your_key>
 # ./scripts/sglang/stop.sh
 
 # Interactive mode: reuse one environment across turns
-python scripts/run/run_cli.py --config configs/graph.yaml --interactive
+environment-runtime --config configs/graph.yaml --interactive
 
 # Optional: single input
-# python scripts/run/run_cli.py --config configs/graph.yaml --input "Run a functional test for me"
+# environment-runtime --config configs/graph.yaml --input "Run a functional test for me"
 ```
 
 The main config file is `configs/graph.yaml`. Common runtime settings are documented directly in the file, including:
@@ -144,13 +175,13 @@ More entry points:
 
 ```bash
 # Print the full trace, including show_environment
-python scripts/run/run_cli_show.py --config configs/graph.yaml --input "Run a functional test for me"
+environment-runtime-show --config configs/graph.yaml --input "Run a functional test for me"
 
 # Run one case with your own case.json
-python scripts/run/run_case.py --config configs/graph.yaml --case /path/to/case.json
+environment-runtime-case --config configs/graph.yaml --case /path/to/case.json
 
 # Run a directory of case json files
-python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to/cases_dir
+environment-runtime-cases --config configs/graph.yaml --cases-dir /path/to/cases_dir
 ```
 
 Run outputs are written by default to `var/runs/run_YYYYMMDD_HHMMSS/environment.json`.
@@ -159,6 +190,15 @@ When inspecting the execution path, start with `track`:
 
 - If you see `agent=pyskill, event=dispatch_pyskill`, the task has entered async workflow / pyskill dispatch
 - If the current round directly produces `done/failed` without `dispatch_pyskill`, it usually completed through a sync skill or executor path
+
+## Development and Tests
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest
+```
+
+GitHub Actions currently runs the base pytest suite on push and pull request. Post-training dependencies are not installed by default; install `requirements-post-training.txt` only when running SFT / GRPO / DPO, and make sure CUDA, verl, and SGLang match your environment.
 
 ## Limitations
 
@@ -190,5 +230,5 @@ When inspecting the execution path, start with `track`:
 - Improve agent strategy for higher KV-cache hit rates by stabilizing prompt prefixes, agent scheduling, and context injection order.
 - Improve tool result trimming beyond the current head/tail plus BM25 middle-hit strategy.
 - Add reproducible benchmarks with fixed case distributions, runtime config, and token accounting.
-- Complete project engineering basics: add `pyproject.toml` and GitHub Actions for basic tests.
+- Continue improving project engineering basics: release metadata, versioning policy, and broader CI checks.
 - Split large runtime files by graph orchestration, node implementation, tool execution, and skill worker boundaries.
