@@ -1,5 +1,7 @@
 # Environment-Runtime
 
+中文 | [English](README.en.md)
+
 Environment-Runtime 是一个面向稳定、可复用工程流程的任务路由框架，对齐 OpenClaw 的基础需求，在稳定工程场景下实现极低 token 消耗，并提供更流畅的等待体验与更稳定的 Skill 工程化能力。
 
 核心设计思路是按任务不确定性做双重截留：controller 一次截留 + executor pyskill 二次截留。`functest / accutest / perftest` 只是当前仓库的占位示例 task type，用于演示高确定性任务如何更早离开高成本路径；`skill / pyskill` 属于受约束的 agentic loop；仅将剩余高不确定性任务送入自由度最高的 executor loop。这个双重截留策略一方面显著降低 token 消耗，另一方面也能大幅减少幻觉；在高确定性任务占主导的场景下，经验消耗约为 OpenClaw 的 7%。
