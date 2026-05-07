@@ -190,5 +190,5 @@ When inspecting the execution path, start with `track`:
 - Improve agent strategy for higher KV-cache hit rates by stabilizing prompt prefixes, agent scheduling, and context injection order.
 - Improve tool result trimming beyond the current head/tail plus BM25 middle-hit strategy.
 - Add reproducible benchmarks with fixed case distributions, runtime config, and token accounting.
-- Complete project engineering basics: add `pyproject.toml`, `LICENSE`, and GitHub Actions for basic tests.
+- Complete project engineering basics: add `pyproject.toml` and GitHub Actions for basic tests.
 - Split large runtime files by graph orchestration, node implementation, tool execution, and skill worker boundaries.
