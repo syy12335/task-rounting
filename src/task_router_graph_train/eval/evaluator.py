@@ -57,7 +57,7 @@ def evaluate_holdout_predictions(
             raise ValueError(f"holdout gold_action must be schema-valid: {sample_id}: {gold_errors[0]}")
 
         prediction_row = predictions_by_id.get(sample_id, {})
-        predicted_action, parse_errors = _extract_predicted_action(prediction_row)
+        predicted_action, parse_errors, prediction_raw_text, prediction_raw_text_is_fallback = _extract_predicted_action(prediction_row)
         prediction_found = bool(prediction_row)
 
         schema_valid = False
@@ -92,6 +92,8 @@ def evaluate_holdout_predictions(
                 "state_input": copy.deepcopy(state_input),
                 "gold_action": copy.deepcopy(gold_action),
                 "prediction_action": copy.deepcopy(predicted_action or {}),
+                "prediction_raw_text": prediction_raw_text,
+                "prediction_raw_text_is_fallback": prediction_raw_text_is_fallback,
                 "semantic_pass": semantic_pass,
                 "judge_reason": judge_reason,
                 "prediction_found": prediction_found,
@@ -156,6 +158,8 @@ def build_holdout_badcase_candidates(evidence_rows: list[dict[str, Any]]) -> lis
                 "trigger_reason": trigger_reason,
                 "state_input": copy.deepcopy(row.get("state_input", {})),
                 "policy_output": copy.deepcopy(row.get("prediction_action", {})),
+                "policy_output_raw_text": str(row.get("prediction_raw_text", "")),
+                "policy_output_raw_text_is_fallback": bool(row.get("prediction_raw_text_is_fallback", False)),
                 "parse_ok": bool(row.get("parse_valid", False)),
                 "schema_ok": bool(row.get("schema_valid", False)),
                 "protocol_ok": bool(row.get("protocol_valid", False)),
@@ -172,20 +176,23 @@ def _resolve_regression_teacher(config_path: Path | None) -> dict[str, Any]:
     return resolve_teacher_config(payload, role="regression_judge")
 
 
-def _extract_predicted_action(prediction_row: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+def _extract_predicted_action(prediction_row: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str], str, bool]:
     if not isinstance(prediction_row, dict) or not prediction_row:
-        return None, ["missing_prediction"]
+        return None, ["missing_prediction"], "", False
 
     payload = prediction_row.get("prediction")
     if isinstance(payload, dict):
-        return payload, []
+        return payload, [], json.dumps(payload, ensure_ascii=False, indent=2), True
     if isinstance(payload, str):
-        return parse_candidate_action(payload)
+        parsed, errors = parse_candidate_action(payload)
+        return parsed, errors, payload, False
 
     if isinstance(prediction_row.get("response"), str):
-        return parse_candidate_action(str(prediction_row["response"]))
+        raw_text = str(prediction_row["response"])
+        parsed, errors = parse_candidate_action(raw_text)
+        return parsed, errors, raw_text, False
 
-    return None, ["unsupported_prediction_shape"]
+    return None, ["unsupported_prediction_shape"], "", False
 
 
 def _resolve_failure_reason(

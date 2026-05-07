@@ -47,6 +47,16 @@ _RUBRICS: dict[str, dict[str, Any]] = {
             "reference_action 必须满足 schema 和 protocol 约束。",
         ],
     },
+    "controller_preference_admission_v1": {
+        "title": "Controller badcase preference admission and gold generation",
+        "criteria": [
+            "先判断 badcase 是否值得进入 DPO preference 队列。",
+            "只有 admission=true 时才输出 chosen_response 或 gold_case。",
+            "chosen_response 必须严格基于当前可见 state，不允许使用 hidden facts 或 verifier sidecar。",
+            "chosen_response 必须满足 schema 和 protocol 约束。",
+            "rejected 由输入中的当前 policy bad output 提供，不要重写 rejected。",
+        ],
+    },
     "controller_regression_judge_v1": {
         "title": "Controller semantic equivalence judge",
         "criteria": [
@@ -95,7 +105,7 @@ def resolve_teacher_config(config: dict[str, Any], role: str = DEFAULT_TEACHER_R
     default_rubric = {
         "reward_judge": "controller_grpo_pairwise_v1",
         "reference_generator": "controller_reference_generator_v1",
-        "admission_judge": "controller_sft_admission_v1",
+        "admission_judge": "controller_preference_admission_v1",
         "regression_judge": "controller_regression_judge_v1",
     }.get(role, "controller_grpo_pairwise_v1")
     teacher["rubric_id"] = str(teacher.get("rubric_id", default_rubric)).strip()
@@ -588,6 +598,55 @@ def review_badcase_for_sft(
     return _normalize_admission_judge_result(sample_id=sample_id, raw_result=raw_result)
 
 
+def review_badcase_for_preference(
+    *,
+    sample_id: str,
+    state_input: dict[str, Any],
+    policy_output: dict[str, Any],
+    policy_output_raw_text: str,
+    source: str,
+    trigger_reason: str,
+    teacher_config: dict[str, Any],
+) -> dict[str, Any]:
+    mode = str(teacher_config.get("mode", "online")).strip().lower() or "online"
+    if mode != "online":
+        raise ValueError("admission_judge currently only supports teacher.mode=online")
+
+    rubric = get_teacher_rubric(str(teacher_config.get("rubric_id", "")))
+    payload = {
+        "task": "判断当前 badcase 是否接纳进 DPO preference 队列，并在 admission=true 时输出 chosen_response/gold_case。",
+        "sample_id": sample_id,
+        "state_input": copy.deepcopy(state_input),
+        "policy_output": copy.deepcopy(policy_output),
+        "policy_output_raw_text": str(policy_output_raw_text),
+        "source": source,
+        "trigger_reason": trigger_reason,
+        "rubric": rubric,
+        "output_schema": {
+            "admission": True,
+            "chosen_response": {
+                "action_kind": "observe",
+                "tool": "build_context_view",
+                "args": {},
+                "reason": "string",
+            },
+            "confidence": 1.0,
+            "reason": "string",
+        },
+    }
+    raw_result = _chat_json(
+        base_url=str(teacher_config["base_url"]),
+        api_key=str(teacher_config["api_key"]),
+        model=str(teacher_config["model"]),
+        timeout_sec=float(teacher_config["timeout_sec"]),
+        temperature=float(teacher_config.get("temperature", 0.0)),
+        max_tokens=int(teacher_config.get("max_tokens", 2048)),
+        system_prompt=_build_preference_admission_system_prompt(rubric),
+        user_payload=payload,
+    )
+    return _normalize_preference_admission_result(sample_id=sample_id, raw_result=raw_result)
+
+
 def _build_group_teacher_system_prompt(rubric: dict[str, Any]) -> str:
     title = str(rubric.get("title", "Controller next-action ranking")).strip()
     criteria = rubric.get("criteria", [])
@@ -658,6 +717,33 @@ def _build_admission_judge_system_prompt(rubric: dict[str, Any]) -> str:
             "",
             "输出字段必须包含 admission、confidence、reason。",
             "admission=false 时 reference_action 必须为 null 或省略。",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _build_preference_admission_system_prompt(rubric: dict[str, Any]) -> str:
+    title = str(rubric.get("title", "Controller badcase preference admission and gold generation")).strip()
+    criteria = rubric.get("criteria", [])
+    lines = [
+        "你是 controller DPO 回流链路里的 preference admission judge。",
+        "你需要先判断 badcase 是否接纳进 DPO preference 队列。",
+        "只有 admission=true 时才输出 chosen_response；chosen_response 是同一 state 下优于输入 policy bad output 的 gold case。",
+        "rejected 由输入中的 policy_output_raw_text 提供，你不要重写 rejected。",
+        "必须严格输出一个 JSON object，不要输出 markdown，不要输出额外解释。",
+        "",
+        f"Rubric: {title}",
+    ]
+    for item in criteria if isinstance(criteria, list) else []:
+        text = str(item).strip()
+        if text:
+            lines.append(f"- {text}")
+    lines.extend(
+        [
+            "",
+            "输出字段必须包含 admission、confidence、reason。",
+            "admission=false 时 chosen_response 必须为 null 或省略。",
+            "admission=true 时 chosen_response 必须是 schema-valid 且 protocol-valid 的 action object。",
         ]
     )
     return "\n".join(lines).strip()
@@ -1078,6 +1164,42 @@ def _normalize_admission_judge_result(*, sample_id: str, raw_result: dict[str, A
         "sample_id": sample_id,
         "admission": admission,
         "reference_action": copy.deepcopy(reference_action) if isinstance(reference_action, dict) else {},
+        "confidence": confidence,
+        "reason": str(raw_result.get("reason", "")).strip(),
+        "schema_valid": schema_valid,
+        "validation_errors": list(validation_errors),
+        "protocol_valid": protocol_valid,
+        "protocol_errors": list(protocol_errors),
+        "raw_result": copy.deepcopy(raw_result),
+    }
+
+
+def _normalize_preference_admission_result(*, sample_id: str, raw_result: dict[str, Any]) -> dict[str, Any]:
+    admission = raw_result.get("admission")
+    if not isinstance(admission, bool):
+        raise ValueError(f"admission_judge must return admission boolean for {sample_id}")
+    try:
+        confidence = float(raw_result.get("confidence", 1.0 if admission else 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"admission_judge confidence must be numeric for {sample_id}") from exc
+
+    chosen_response = raw_result.get("chosen_response")
+    if not isinstance(chosen_response, dict):
+        chosen_response = raw_result.get("gold_case")
+    validation_errors: list[str] = []
+    protocol_errors: list[str] = []
+    schema_valid = False
+    protocol_valid = False
+    if admission:
+        if not isinstance(chosen_response, dict):
+            raise ValueError(f"admission_judge must return chosen_response object when admission=true: {sample_id}")
+        schema_valid, validation_errors = validate_action_dict(chosen_response)
+        if schema_valid:
+            protocol_valid, protocol_errors = validate_protocol_action(chosen_response)
+    return {
+        "sample_id": sample_id,
+        "admission": admission,
+        "chosen_response": copy.deepcopy(chosen_response) if isinstance(chosen_response, dict) else {},
         "confidence": confidence,
         "reason": str(raw_result.get("reason", "")).strip(),
         "schema_valid": schema_valid,

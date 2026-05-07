@@ -104,6 +104,7 @@ def test_build_holdout_badcase_candidates_skips_passed_rows() -> None:
             "sample_id": "f1",
             "state_input": {"USER_INPUT": "u"},
             "prediction_action": {"action_kind": "observe"},
+            "prediction_raw_text": '{"action_kind":"observe"}',
             "semantic_pass": False,
             "trigger_reason": "holdout_failed",
             "parse_valid": True,
@@ -114,6 +115,7 @@ def test_build_holdout_badcase_candidates_skips_passed_rows() -> None:
     candidates = build_holdout_badcase_candidates(rows)
     assert len(candidates) == 1
     assert candidates[0]["sample_id"] == "f1"
+    assert candidates[0]["policy_output_raw_text"] == '{"action_kind":"observe"}'
 
 
 def test_evaluate_holdout_predictions_can_enqueue_failed_badcases(monkeypatch, tmp_path: Path) -> None:

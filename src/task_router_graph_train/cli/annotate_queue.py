@@ -8,7 +8,7 @@ from ..feedback import annotate_teacher_queue
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Annotate current round teacher_queue and append valid sft_admissions.")
+    parser = argparse.ArgumentParser(description="Annotate current round teacher_queue and append valid preference_admissions.")
     parser.add_argument(
         "--round-id",
         default="",

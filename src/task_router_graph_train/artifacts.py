@@ -15,6 +15,7 @@ HOLDOUT_RECORDS_ARTIFACT_TYPE = "holdout_records_v1"
 TEACHER_QUEUE_ARTIFACT_TYPE = "teacher_queue_v1"
 TEACHER_DECISIONS_ARTIFACT_TYPE = "teacher_decisions_v1"
 SFT_ADMISSIONS_ARTIFACT_TYPE = "sft_admissions_v1"
+PREFERENCE_ADMISSIONS_ARTIFACT_TYPE = "preference_admissions_v1"
 
 
 def utc_now_iso() -> str:

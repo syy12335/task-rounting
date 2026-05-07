@@ -9,14 +9,12 @@ from ..rounds import ROUND_ASSETS_ROOT
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Prepare one post-training round from manual_protocol_v1 + previous round sft_admissions."
-    )
+    parser = argparse.ArgumentParser(description="Prepare one post-training round from manual_protocol_v1.")
     parser.add_argument("--round-id", required=True, help="Round identifier, for example: round_0001")
     parser.add_argument(
         "--previous-round-id",
         default="",
-        help="Previous round id whose sft_admissions.jsonl will be merged into current SFT source.",
+        help="Previous round id for lineage only. SFT warm start data is not extended from previous admissions.",
     )
     parser.add_argument(
         "--round-assets-root",

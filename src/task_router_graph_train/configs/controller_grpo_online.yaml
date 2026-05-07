@@ -3,7 +3,7 @@
 # 共享的模型、数据和运行时参数放在各自配置段。
 seed: 42
 
-# 训练轮次标识。`previous_round_id` 用来读取上一轮接纳的反馈样本。
+# 训练轮次标识。`previous_round_id` 仅保留 lineage；SFT 不再合入上一轮 badcase。
 round:
   id: round_0001
   previous_round_id: ""
@@ -20,12 +20,14 @@ run:
   # evaluate 会用已有 predictions 调用 teacher/regression judge。
   evaluate: true
   annotate_queue: true
+  dpo: false
 
 # 生成产物默认写到 var/runs。路径可使用 {round_id} 占位。
 outputs:
   sft_dir: var/runs/task_router_graph_train/sft/{round_id}
   sft_merged_dir: var/runs/task_router_graph_train/sft/{round_id}/merged
   grpo_dir: var/runs/task_router_graph_train/grpo/{round_id}
+  dpo_dir: var/runs/task_router_graph_train/dpo/{round_id}
   eval_dir: var/runs/task_router_graph_train/eval/{round_id}
   holdout_predictions: var/runs/task_router_graph_train/predictions/{round_id}_holdout_predictions.jsonl
 
@@ -181,9 +183,9 @@ sft:
   torch_empty_cache_steps: 1
   nproc_per_node: 1
 
-# feedback loop 策略：控制 teacher 标注的 badcase 如何进入后续轮次。
+# feedback loop 策略：teacher 接纳 badcase 时生成 DPO chosen/rejected pair。
 feedback:
-  auto_sft_confidence_threshold: 0.85
+  preference_confidence_threshold: 0.85
   regression_reserve_ratio: 0.2
   regression_reserve_min: 1
   eval_ratio: 0.2

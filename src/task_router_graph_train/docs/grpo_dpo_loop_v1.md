@@ -121,7 +121,7 @@ warm_start_sft_data = manual_protocol_v1.sft
 - `task_content` 两段式稳定性缺口
 - manual protocol 覆盖不到的基础 environment grounding 模式
 
-这些样本仍然先进入 `sft_admissions`，再考虑晋升到下一版 manual protocol。
+这些样本不进入每轮 badcase 回流；需要扩充基础协议时，直接更新下一版 manual protocol。
 
 ## Stage 2: GRPO
 
@@ -328,7 +328,6 @@ teacher 输出至少包含：
 - `rejected_response`
 - `reason`
 - `confidence`
-- `sft_admission`
 
 主链：
 
@@ -336,17 +335,9 @@ teacher 输出至少包含：
 teacher_queue -> annotate_queue -> teacher_decisions -> preference_admissions -> DPO
 ```
 
-辅助链：
-
-```text
-teacher_decisions -> sft_admissions
-```
-
-`sft_admission = true` 只用于稳定协议缺口。
-
 ## Round Artifacts
 
-建议新增：
+当前 round 默认包含：
 
 ```text
 preference_admissions.jsonl
@@ -373,10 +364,7 @@ row schema：
 }
 ```
 
-`sft_admissions.jsonl` 保留，但用途收窄：
-
-- protocol repair
-- manual protocol 晋升候选
+`sft_admissions.jsonl` 不再作为默认回流资产。
 
 ## Evaluation
 
@@ -458,7 +446,7 @@ controller action JSON object
 - 停止当前 DPO/GRPO checkpoint 晋升
 - 回查 raw response
 - 回查 response length clipping
-- 把样本转入 `sft_admissions` 候选
+- 回到 manual protocol 重新补基础协议样本
 
 ### Preference Overfit
 
@@ -501,7 +489,7 @@ controller action JSON object
 - 回查 `observe.args`
 - 回查 `generate_task.task_content`
 - 对 closed-form args 做 deterministic override
-- 必要时进入 `sft_admissions`
+- 必要时补入下一版 manual protocol
 
 ## 推荐首轮实验
 
@@ -551,7 +539,7 @@ SFT -> DPO
 2. parse/schema/protocol 失败的 rejected 是否需要单独 loss weight？
 3. DPO 数据窗口默认取最近 1 轮还是最近 N 轮？
 4. holdout failed 样本进入 preference 后，是否必须从固定 holdout 退役？
-5. `sft_admissions` 晋升到 `manual_protocol_v2` 的频率如何控制？
+5. manual protocol v2 的晋升频率如何控制？
 
 ## External References
 

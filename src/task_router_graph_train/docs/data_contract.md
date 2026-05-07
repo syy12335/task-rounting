@@ -9,13 +9,9 @@
 - `holdout_records`
 - `teacher_queue`
 - `teacher_decisions`
-- `sft_admissions`
-
-候选 `GRPO / DPO` 链路另引入：
-
 - `preference_admissions`
 
-`preference_admissions` 目前是下一阶段契约，不在 `prepare_round` 默认产物里，也没有对应 DPO CLI。
+`sft_admissions` 是旧回流对象，不再是当前 round 默认产物。
 
 ## manual_protocol_v1
 
@@ -60,22 +56,21 @@
 - `holdout_records.jsonl`
 - `teacher_queue.jsonl`
 - `teacher_decisions.jsonl`
-- `sft_admissions.jsonl`
+- `preference_admissions.jsonl`
 - `round_manifest.json`
 
 说明：
 
-- `teacher_queue.jsonl` 与 `sft_admissions.jsonl` 会由 `prepare_round` 初始化
+- `teacher_queue.jsonl` 与 `preference_admissions.jsonl` 会由 `prepare_round` 初始化
 - `teacher_decisions.jsonl` 通常由 `annotate_queue` 生成后写入 manifest
-- `preference_admissions.jsonl` 尚未进入当前 round manifest
 
 ## SFT
 
 ```text
-current_sft_data = manual_protocol_v1.sft + previous_round.sft_admissions
+warm_start_sft_data = manual_protocol_v1.sft
 ```
 
-这是当前实现的可执行回流口径。下一阶段 DPO 链路落地后，`sft_admissions` 会收窄为协议修补和 manual protocol 晋升候选，不再作为 badcase 的默认主回流对象。
+SFT 只作为最早 warm start，不消费 badcase 回流。
 
 ## GRPO
 
@@ -102,38 +97,34 @@ current_sft_data = manual_protocol_v1.sft + previous_round.sft_admissions
 - `trigger_reason`
 - `state_input`
 - `policy_output`
+- `policy_output_raw_text`
+- `parse_ok`
+- `schema_ok`
+- `protocol_ok`
 - `dedup_key`
 
-### sft_admissions
-
-最小字段：
-
-- `sample_id`
-- `state_input`
-- `reference_action`
-- `reason`
-- `source_round`
-
-## 候选回流对象
-
 ### preference_admissions
-
-状态：下一阶段契约，尚未由当前 CLI 生成。
 
 最小字段：
 
 - `sample_id`
 - `state_input`
 - `chosen_response`
+- `chosen_raw_text`
 - `rejected_response`
-- `reason`
+- `rejected_raw_text`
+- `source`
+- `trigger_reason`
 - `source_round`
+- `teacher_reason`
+- `confidence`
+- `metadata`
 
 约定：
 
 - `chosen_response` 必须 schema-valid + protocol-valid
 - `chosen_response` 必须 grounded in 当前可见 environment
-- `rejected_response` 必须来自同一个 `state_input`
+- `rejected_response` / `rejected_raw_text` 必须来自同一个 `state_input` 下的当前 policy output
 - parse/schema/protocol 失败的 raw response 可以作为 rejected
 - 不使用 hidden state / verifier sidecar / only-track 细节构造 chosen
 
@@ -143,6 +134,8 @@ current_sft_data = manual_protocol_v1.sft + previous_round.sft_admissions
 
 - `sample_id`
 - `admission`
-- `reference_action`
+- `chosen_response`
+- `rejected_response`
+- `rejected_raw_text`
 - `reason`
 - `confidence`

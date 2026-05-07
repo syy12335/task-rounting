@@ -16,7 +16,7 @@ from .dataset import (
     write_jsonl,
 )
 from .eval import build_holdout_badcase_candidates, evaluate_holdout_predictions
-from .feedback import admit_sft_admissions, annotate_teacher_queue, enqueue_teacher_queue
+from .feedback import admit_preference_admissions, annotate_teacher_queue, enqueue_teacher_queue
 from .reward_specs import REWARD_SPECS
 from .rounds import ROUND_ASSETS_ROOT, list_round_ids, load_round_manifest, resolve_latest_round_id
 from .runtime_adapter import (
@@ -38,9 +38,11 @@ from .train import (
     build_grpo_rollout_groups,
     build_sft_token_labels,
     build_teacher_rankings,
+    build_dpo_dataset_rows,
     load_sft_examples,
     tokenize_sft_example,
     train_controller_grpo,
+    train_controller_dpo,
     train_controller_sft,
     validate_controller_action,
     validate_teacher_rankings,
@@ -59,7 +61,7 @@ __all__ = [
     "REWARD_SPECS",
     "ROLE_CONTROLLER",
     "ROUND_ASSETS_ROOT",
-    "admit_sft_admissions",
+    "admit_preference_admissions",
     "annotate_teacher_queue",
     "build_grpo_rollout_groups",
     "build_holdout_badcase_candidates",
@@ -68,6 +70,7 @@ __all__ = [
     "build_reply_state_input",
     "build_sft_token_labels",
     "build_teacher_rankings",
+    "build_dpo_dataset_rows",
     "enqueue_teacher_queue",
     "evaluate_holdout_predictions",
     "list_round_ids",
@@ -84,6 +87,7 @@ __all__ = [
     "sanitize_environment_payload",
     "tokenize_sft_example",
     "train_controller_grpo",
+    "train_controller_dpo",
     "train_controller_sft",
     "validate_controller_action",
     "validate_runtime_controller_action",

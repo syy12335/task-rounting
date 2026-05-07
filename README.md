@@ -4,7 +4,7 @@ Environment-Runtime 是一个面向稳定、可复用工程流程的任务路由
 
 核心设计思路是按任务不确定性做双重截留：controller 一次截留 + executor pyskill 二次截留。`functest / accutest / perftest` 只是当前仓库的占位示例 task type，用于演示高确定性任务如何更早离开高成本路径；`skill / pyskill` 属于受约束的 agentic loop；仅将剩余高不确定性任务送入自由度最高的 executor loop。这个双重截留策略一方面显著降低 token 消耗，另一方面也能大幅减少幻觉；在高确定性任务占主导的场景下，经验消耗约为 OpenClaw 的 7%。
 
-除运行时能力外，仓库还提供了面向 controller 的后训练框架。当前已落地 `manual_protocol_v1 -> SFT -> GRPO -> holdout evaluate -> teacher_queue / annotate_queue / sft_admissions`，用于验证 environment-grounded 路由决策质量；下一阶段训练路线会转向 `SFT warm start -> (GRPO online rollout -> preference_admissions -> DPO) -> ...`，让 teacher 给出的更优 action 和当前 policy bad output 组成 `chosen / rejected` 偏好样本，再由 DPO 继续优化 controller。
+除运行时能力外，仓库还提供了面向 controller 的后训练框架。当前训练主线是 `manual_protocol_v1 -> SFT warm start -> GRPO -> teacher_queue / annotate_queue -> preference_admissions -> DPO -> next GRPO ...`，用于验证 environment-grounded 路由决策质量；teacher 会在筛选 badcase 时生成同一状态下的 gold case，让 gold output 和当前 policy bad output 组成 `chosen / rejected` 偏好样本，再由 DPO 继续优化 controller。
 
 ---
 
@@ -183,7 +183,7 @@ python scripts/run/run_cases.py --config configs/graph.yaml --cases-dir /path/to
 
 ## 更新计划
 
-- 训练侧把 badcase 回流改成 DPO 偏好优化链路：badcase 不再只沉淀为下一轮 SFT 的修正样本，而是和 teacher 给出的更优 action 组成同一状态下的偏好样本，由 DPO 继续优化 controller 的 environment-grounded 决策能力。
+- 当前 DPO 回流改造已完成代码侧切换，下一步需要补一轮真实训练链路测试，重点验证截断配置、`prompt/chosen/rejected` 长度分布和超长样本处理。
 - 双重截留的确定性判断需要插件化：当前 `functest / accutest / perftest` 等确定性分流仍偏硬编码，后续要改成可注册、可替换的插件机制。
 - 运行时侧继续细化 Environment 中的 trace / track：补齐更稳定的事件结构、视图裁剪和排障读取口径。
 - 细化 Environment 压缩机制：history / view 压缩要依据当前 task 的目标、状态和证据需求选择保留内容，不能无目的地压缩。

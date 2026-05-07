@@ -29,11 +29,11 @@
 当前轮次 `SFT` 数据来源：
 
 ```text
-current_sft_data = manual_protocol_v1.sft + previous_round.sft_admissions
+warm_start_sft_data = manual_protocol_v1.sft
 ```
 
 `manual_protocol_v1` 是 frozen base。  
-运行后的回流样本只进入下一轮训练增量，不直接改这批真源。
+运行后的 badcase 回流只进入 DPO preference 队列，不直接改这批真源。
 
 ## 2. GRPO
 
@@ -287,9 +287,10 @@ badcase 来源：
 当前已实现的 badcase 作用是：
 
 - 进入 teacher 标注
-- 通过 `sft_admissions` 回流成下一轮 `SFT` 增量
+- teacher 接纳时生成 gold case
+- 和当前 policy bad output 组成 `preference_admissions`
 
-这条链路仍可执行，但已不再是长期主回流方向。下一阶段会优先把 badcase 和 teacher 生成的更优 action 组成 `preference_admissions`，由 DPO 消费。
+原始 badcase 不直接给 DPO 消费；只有带 `chosen / rejected` 的 `preference_admissions` 才是 DPO 输入。
 
 固定 `holdout` 上失败的样本可以直接进入 `teacher_queue`。
 
@@ -316,7 +317,7 @@ badcase 来源：
 
 - 每组只选最差的一名
 - 不看 score 阈值
-- 进入 `teacher_queue` 后，当前实现由 teacher 判断是否接纳进 `sft_admissions`
+- 进入 `teacher_queue` 后，teacher 判断是否接纳进 `preference_admissions`
 
 ### 4.2 入队字段
 
@@ -336,15 +337,16 @@ badcase 来源：
 
 当前 `annotate_queue` 的 teacher 负责两件事：
 
-1. 判断样本是否接纳进下一轮 `SFT`
-2. 生成 `reference_action`
+1. 判断样本是否接纳进 DPO preference 队列
+2. 生成同一 `state_input` 下优于 policy bad output 的 gold case
 
 teacher 输入至少包括：
 
 - `USER_INPUT`
 - `ENVIRONMENT_JSON`
 - `SKILLS_INDEX`
-- 当前 policy 输出
+- 当前 policy 输出 parsed action
+- 当前 policy 输出 raw text
 - 样本来源信息
 - 触发原因和相对差证据
 
@@ -352,8 +354,10 @@ teacher 输出至少包括：
 
 - `admission`
   - `true` 或 `false`
-- `reference_action`
+- `chosen_response`
   - `admission=true` 时必填
+- `rejected_raw_text`
+  - 来自原 policy output，不由 teacher 重写
 - `reason`
 
 teacher 规则：
@@ -363,7 +367,7 @@ teacher 规则：
 - 不使用 verifier sidecar
 - 不补写 only-track 细节
 
-`reference_action` 规则：
+`chosen_response` 规则：
 
 - schema-valid
 - protocol-valid
@@ -374,45 +378,33 @@ teacher 未接纳的样本直接忽略。
 当前已实现入口为：
 
 ```text
-teacher_queue -> annotate_queue -> teacher_decisions -> sft_admissions
+teacher_queue -> annotate_queue -> teacher_decisions -> preference_admissions
 ```
 
 ### 4.4 回流
 
-teacher 接纳后，样本进入 `sft_admissions`。这是当前代码路径，不代表后续 preference/DPO 链路已经落地。
+teacher 接纳后，样本进入 `preference_admissions`。
 
 进入条件：
 
-- `reference_action` 稳定
-- `reference_action` schema-valid
-- `reference_action` protocol-valid
+- `chosen_response` 稳定
+- `chosen_response` schema-valid
+- `chosen_response` protocol-valid
+- `rejected_raw_text` 来自当前 policy output
 - teacher 理由清晰
 - 与现有训练样本不高度重复
 
-当前实现的下一轮训练时：
+DPO 训练时：
 
 ```text
-next_round_sft = manual_protocol_v1.sft + previous_round.sft_admissions
+prompt = render_controller_prompt(state_input)
+chosen = chosen_raw_text
+rejected = rejected_raw_text
 ```
 
-`sft_admissions` 满足下面条件后，再考虑晋升到下一版真源：
+## 5. GRPO / DPO 主线
 
-- 多轮训练稳定提升
-- 固定 `holdout` 无明显回退
-- teacher 标注质量稳定
-- bucket 覆盖合理
-
-晋升形式：
-
-```text
-manual_protocol_v1 + promoted_sft_admissions -> manual_protocol_v2
-```
-
-## 5. GRPO / DPO 候选演进
-
-当前代码仍以 `SFT -> GRPO -> badcase -> sft_admissions` 为已实现链路；这条链路已经被标记为过渡形态，因为它会丢掉 rejected output。
-
-下一阶段目标链路：
+当前目标链路：
 
 ```text
 SFT -> GRPO -> DPO -> GRPO -> DPO -> ...
@@ -423,14 +415,13 @@ SFT -> GRPO -> DPO -> GRPO -> DPO -> ...
 - `SFT` 只作为 warm start
 - `GRPO` 产生 on-policy candidates 和 teacher ranking
 - `DPO` 消费 `chosen / rejected` pair
-- badcase 主回流对象从 `sft_admissions` 调整为 `preference_admissions`
-- `sft_admissions` 收窄为协议修补和 manual protocol 晋升候选
+- badcase 主回流对象是 `preference_admissions`
+- SFT 只用于最早 warm start
 
 落地状态：
 
-- `preference_admissions` 已有文档契约
-- DPO 依赖已在 `requirements-post-training.txt` 预留
-- 当前还没有 `train_dpo` CLI，也没有 round manifest 中的 `preference_admissions` 默认资产
+- `preference_admissions` 已进入 round manifest
+- `train_dpo` CLI 消费 `prompt / chosen / rejected`
 
 详细方案见：
 

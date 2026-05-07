@@ -9,7 +9,7 @@ from task_router_graph_train.runtime_adapter import PACKAGE_ROOT
 def test_only_new_cli_entrypoints_exist() -> None:
     cli_dir = PACKAGE_ROOT / "cli"
     existing = {path.name for path in cli_dir.glob("*.py")}
-    assert {"prepare_round.py", "train_sft.py", "train_grpo.py", "evaluate.py", "annotate_queue.py"}.issubset(existing)
+    assert {"prepare_round.py", "train_sft.py", "train_grpo.py", "train_dpo.py", "evaluate.py", "annotate_queue.py"}.issubset(existing)
 
     removed = {
         "build_assets.py",
@@ -34,6 +34,7 @@ def test_new_cli_modules_are_importable() -> None:
         "task_router_graph_train.cli.prepare_round",
         "task_router_graph_train.cli.train_sft",
         "task_router_graph_train.cli.train_grpo",
+        "task_router_graph_train.cli.train_dpo",
         "task_router_graph_train.cli.evaluate",
         "task_router_graph_train.cli.annotate_queue",
     ]

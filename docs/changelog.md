@@ -62,8 +62,8 @@
 ## 本阶段重点变化
 
 1. 训练闭环从“分散入口”收口到 manifest / round 资产主线。
-2. 当前已实现链路是 `manual_protocol_v1 -> SFT -> GRPO -> teacher_queue -> annotate_queue -> sft_admissions`。
-3. badcase 直接回流到下一轮 SFT 已被标记为过渡方向；后续重点转向 `GRPO online rollout -> preference_admissions -> DPO` 循环，其中 teacher gold answer 与 bad output 会组成偏好样本。
+2. 当前已实现链路是 `manual_protocol_v1 -> SFT warm start -> GRPO -> teacher_queue -> annotate_queue -> preference_admissions -> DPO`。
+3. badcase 不再直接回流到下一轮 SFT；当前重点是 `GRPO online rollout -> preference_admissions -> DPO` 循环，其中 teacher gold answer 与 bad output 会组成偏好样本。
 4. `GRPO / DPO` 下一阶段方案已形成独立文档，核心是保留 `chosen / rejected` pair，而不是把 badcase 压平成单条 SFT reference。
 5. teacher 职责当前按正式链路收口为 reward ranking、holdout 语义判等与 badcase admission 三类评判；下一阶段会增加 gold answer / preference admission 口径。
 6. 固定 holdout evaluation 已补齐单 checkpoint 评测和 GRPO 诊断；paired comparison 指标仍是目标协议，compare CLI 尚未落地。
@@ -81,7 +81,7 @@
 3. `src/task_router_graph_train/docs/overview.md`
    - 看训练闭环总图与输入输出约定
 4. `src/task_router_graph_train/docs/data_contract.md`
-   - 看 manual protocol、round manifest、teacher_queue、sft_admissions 的当前契约，以及 preference admissions 的下一阶段契约
+   - 看 manual protocol、round manifest、teacher_queue、preference_admissions 的当前契约
 5. `src/task_router_graph_train/docs/controller_grpo_reward_spec.md`
    - 看 GRPO reward、hard gate 与 teacher ranking 的当前规则
 6. `src/task_router_graph_train/docs/grpo_dpo_loop_v1.md`
@@ -102,4 +102,4 @@ GRPO online rollout -> teacher gold answer / bad output pair -> DPO -> GRPO onli
 - 保留当前 policy bad output 作为 rejected
 - 生成 teacher gold answer / chosen response
 - 写入 `preference_admissions`，形成 DPO 可消费的 pair 数据
-- 将 `sft_admissions` 收窄为 warm start 补充与协议修补
+- SFT 只作为最早 warm start；后续由 DPO/GRPO checkpoint 迭代

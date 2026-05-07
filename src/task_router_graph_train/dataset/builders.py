@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from ..admissions import load_admission_rows
 from ..artifacts import (
     CONTROLLER_TRAINING_RECORDS_ARTIFACT_TYPE,
     HOLDOUT_RECORDS_ARTIFACT_TYPE,
+    PREFERENCE_ADMISSIONS_ARTIFACT_TYPE,
     ROUND_MANIFEST_ARTIFACT_TYPE,
-    SFT_ADMISSIONS_ARTIFACT_TYPE,
     SFT_EXAMPLES_ARTIFACT_TYPE,
     TEACHER_QUEUE_ARTIFACT_TYPE,
     utc_now_iso,
@@ -20,7 +18,7 @@ from ..artifacts import (
 from ..reward_specs import CONTROLLER_REWARD_SPEC_ID
 from ..rounds import resolve_round_assets_root, resolve_round_dir
 from ..runtime_adapter import ASSETS_ROOT, REPO_ROOT, build_controller_state_input, validate_runtime_controller_action
-from ..types import ControllerGrpoRecord, SftAdmissionRow, SftExample, TrainingRecord, VerifierSidecar
+from ..types import ControllerGrpoRecord, SftExample, TrainingRecord, VerifierSidecar
 from .io import read_jsonl, write_jsonl
 
 FORMAL_ENVIRONMENT_KEYS = (
@@ -189,11 +187,6 @@ def prepare_round_assets(
     round_dir.mkdir(parents=True, exist_ok=True)
 
     manual_rows = load_manual_protocol_samples(manual_protocol_dir)
-    admissions_path = _resolve_previous_admissions_path(
-        round_assets_root=rounds_root,
-        previous_round_id=previous_round_id,
-    )
-    admission_rows = load_admission_rows(admissions_path)
 
     sft_records: list[TrainingRecord] = []
     grpo_records: list[ControllerGrpoRecord] = []
@@ -242,8 +235,6 @@ def prepare_round_assets(
             )
         )
 
-    sft_records.extend(_build_admission_sft_records(admission_rows))
-
     sft_examples = build_controller_sft_examples(sft_records)
     sft_train_examples = [row.to_dict() for row in sft_examples if row.split == "train"]
     sft_eval_examples = [row.to_dict() for row in sft_examples if row.split == "eval"]
@@ -254,7 +245,7 @@ def prepare_round_assets(
     grpo_eval_path = round_dir / "controller_records_eval.jsonl"
     holdout_path = round_dir / "holdout_records.jsonl"
     teacher_queue_path = round_dir / "teacher_queue.jsonl"
-    sft_admissions_path = round_dir / "sft_admissions.jsonl"
+    preference_admissions_path = round_dir / "preference_admissions.jsonl"
 
     write_jsonl(sft_train_path, sft_train_examples)
     write_jsonl(sft_eval_path, sft_eval_examples)
@@ -264,9 +255,11 @@ def prepare_round_assets(
 
     if not teacher_queue_path.exists():
         teacher_queue_path.write_text("", encoding="utf-8")
-    if not sft_admissions_path.exists():
-        sft_admissions_path.write_text("", encoding="utf-8")
-    current_admissions = read_jsonl(sft_admissions_path) if sft_admissions_path.read_text(encoding="utf-8").strip() else []
+    if not preference_admissions_path.exists():
+        preference_admissions_path.write_text("", encoding="utf-8")
+    current_preference_admissions = (
+        read_jsonl(preference_admissions_path) if preference_admissions_path.read_text(encoding="utf-8").strip() else []
+    )
 
     counts_by_split = {
         "sft_train": len(sft_train_examples),
@@ -274,7 +267,7 @@ def prepare_round_assets(
         "grpo_train": len([row for row in grpo_records if row.split == "train"]),
         "grpo_eval": len([row for row in grpo_records if row.split == "eval"]),
         "holdout": len(holdout_rows),
-        "sft_admissions": len(current_admissions),
+        "preference_admissions": len(current_preference_admissions),
     }
 
     manifest = {
@@ -309,14 +302,14 @@ def prepare_round_assets(
                 "artifact_type": TEACHER_QUEUE_ARTIFACT_TYPE,
                 "path": str(teacher_queue_path.resolve()),
             },
-            "sft_admissions": {
-                "artifact_type": SFT_ADMISSIONS_ARTIFACT_TYPE,
-                "path": str(sft_admissions_path.resolve()),
+            "preference_admissions": {
+                "artifact_type": PREFERENCE_ADMISSIONS_ARTIFACT_TYPE,
+                "path": str(preference_admissions_path.resolve()),
             },
         },
         "lineage": {
             "manual_protocol": str((manual_protocol_dir or DEFAULT_MANUAL_PROTOCOL_DIR).resolve()),
-            "previous_admissions": str(admissions_path.resolve()) if admissions_path else "",
+            "previous_round_id": str(previous_round_id or ""),
         },
     }
     write_json(round_dir / ROUND_MANIFEST_NAME, manifest)
@@ -327,36 +320,3 @@ def prepare_round_assets(
         "manifest_path": str((round_dir / ROUND_MANIFEST_NAME).resolve()),
         "counts_by_split": counts_by_split,
     }
-
-
-def _build_admission_sft_records(admissions: list[SftAdmissionRow]) -> list[TrainingRecord]:
-    sft_records: list[TrainingRecord] = []
-    for row in admissions:
-        split = _resolve_admission_split(row.sample_id)
-        metadata = {"source": "sft_admissions", "source_round": row.source_round}
-        sft_records.append(
-            TrainingRecord(
-                sample_id=row.sample_id,
-                role=ROLE_CONTROLLER,
-                state_input=copy.deepcopy(row.state_input),
-                gold_output=copy.deepcopy(row.reference_action),
-                verifier_sidecar=VerifierSidecar(),
-                reward_spec_id=CONTROLLER_REWARD_SPEC_ID,
-                split=split,
-                metadata=copy.deepcopy(metadata),
-            )
-        )
-    return sft_records
-
-
-def _resolve_previous_admissions_path(*, round_assets_root: Path, previous_round_id: str | None) -> Path | None:
-    if not previous_round_id:
-        return None
-    previous_dir = resolve_round_dir(round_id=previous_round_id, root=round_assets_root)
-    path = previous_dir / "sft_admissions.jsonl"
-    if not path.exists():
-        raise FileNotFoundError(f"previous round admissions not found: {path}")
-    return path
-def _resolve_admission_split(sample_id: str) -> str:
-    digest = hashlib.sha256(sample_id.encode("utf-8")).hexdigest()
-    return "eval" if int(digest[:2], 16) < 26 else "train"

@@ -133,7 +133,12 @@ class TeacherQueueRow:
     trigger_reason: str
     state_input: dict[str, Any]
     policy_output: dict[str, Any]
+    policy_output_raw_text: str
+    parse_ok: bool
+    schema_ok: bool
+    protocol_ok: bool
     dedup_key: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -142,7 +147,12 @@ class TeacherQueueRow:
             "trigger_reason": self.trigger_reason,
             "state_input": dict(self.state_input),
             "policy_output": dict(self.policy_output),
+            "policy_output_raw_text": self.policy_output_raw_text,
+            "parse_ok": bool(self.parse_ok),
+            "schema_ok": bool(self.schema_ok),
+            "protocol_ok": bool(self.protocol_ok),
             "dedup_key": self.dedup_key,
+            "metadata": dict(self.metadata),
         }
 
 
@@ -161,6 +171,38 @@ class SftAdmissionRow:
             "reference_action": dict(self.reference_action),
             "reason": self.reason,
             "source_round": self.source_round,
+        }
+
+
+@dataclass
+class PreferenceAdmissionRow:
+    sample_id: str
+    state_input: dict[str, Any]
+    chosen_response: dict[str, Any]
+    chosen_raw_text: str
+    rejected_response: dict[str, Any]
+    rejected_raw_text: str
+    source: str
+    trigger_reason: str
+    source_round: str
+    teacher_reason: str
+    confidence: float
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sample_id": self.sample_id,
+            "state_input": dict(self.state_input),
+            "chosen_response": dict(self.chosen_response),
+            "chosen_raw_text": self.chosen_raw_text,
+            "rejected_response": dict(self.rejected_response),
+            "rejected_raw_text": self.rejected_raw_text,
+            "source": self.source,
+            "trigger_reason": self.trigger_reason,
+            "source_round": self.source_round,
+            "teacher_reason": self.teacher_reason,
+            "confidence": float(self.confidence),
+            "metadata": dict(self.metadata),
         }
 
 
