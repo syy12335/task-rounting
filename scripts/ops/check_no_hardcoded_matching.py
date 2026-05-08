@@ -66,6 +66,10 @@ def main() -> int:
                     r"keywords\s*=\s*\[",
                     "forbidden inline keyword list for status shortcuts",
                 ),
+                (
+                    r"\bfunctest\b|\baccutest\b|\bperftest\b",
+                    "forbidden hardcoded example workflow task type in graph core",
+                ),
             ],
         ),
         (

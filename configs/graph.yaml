@@ -64,8 +64,6 @@ runtime:
   pyskill_timeout_sec: 180
   # controller 快捷路由配置文件。
   intent_shortcuts_config: configs/intent_shortcuts.yaml
-  # controller 未命中特定 task family 时的默认 task type。
-  default_task_type: executor
   # 同一任务允许的最大失败重试次数。
   max_failed_retries: 3
   # 是否启用 agent memory 与上下文压缩。

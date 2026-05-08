@@ -13,14 +13,10 @@ import yaml
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from .agents.async_workflows import (
-    run_accutest_async_workflow,
-    run_functest_async_workflow,
-    run_perftest_async_workflow,
-)
 from .agents.agent_utils import extract_text, parse_json_object
 from .agents.memory import ContextCompressionOptions
 from .agents.pyskill_runtime import PYSKILL_RUNTIME
+from .agents.skill_registry import load_workflow_runner, load_workflow_type_catalog
 from .llm import build_chat_model
 from .nodes import (
     failure_diagnosis_node,
@@ -102,12 +98,15 @@ class TaskRouterGraph:
         self._max_controller_steps = int(runtime_cfg.get("max_controller_steps", runtime_cfg.get("max_observe_steps", 3)))
         self._max_task_turns = int(runtime_cfg.get("max_task_turns", runtime_cfg.get("max_rounds", 5)))
         self._max_failed_retries = int(runtime_cfg.get("max_failed_retries", 3))
-        default_task_type = str(runtime_cfg.get("default_task_type", "executor")).strip().lower()
-        self._default_task_type = default_task_type if default_task_type in {"executor", "functest", "accutest", "perftest"} else "executor"
         self._max_executor_steps = int(runtime_cfg.get("max_executor_steps", 4))
         self._pyskill_timeout_sec = max(5, int(runtime_cfg.get("pyskill_timeout_sec", 180)))
         intent_shortcuts_cfg = str(runtime_cfg.get("intent_shortcuts_config", "configs/intent_shortcuts.yaml")).strip()
         self._status_query_keywords = self._load_status_query_keywords(config_path=intent_shortcuts_cfg)
+        self._workflow_type_catalog = load_workflow_type_catalog(workspace_root=self.root, skills_root=self._skills_root)
+        self._workflow_runners: dict[str, Callable[..., dict[str, Any]]] = {
+            str(task_type).strip().lower(): load_workflow_runner(entry)
+            for task_type, entry in self._workflow_type_catalog.items()
+        }
         self._context_options = ContextCompressionOptions(
             enabled=bool(runtime_cfg.get("context_enabled", True)),
             window_tokens=int(runtime_cfg.get("context_window_tokens", 3000)),
@@ -187,9 +186,7 @@ class TaskRouterGraph:
         builder.add_node("route", self._route_step)
         builder.add_node("retry_reply", self._retry_reply_step)
         builder.add_node("executor", self._executor_step)
-        builder.add_node("functest", self._functest_step)
-        builder.add_node("accutest", self._accutest_step)
-        builder.add_node("perftest", self._perftest_step)
+        builder.add_node("workflow", self._workflow_step)
         builder.add_node("update", self._update_step)
         builder.add_node("failure_diagnose", self._failure_diagnose_step)
         builder.add_node("pre_reply_collect", self._pre_reply_collect_step)
@@ -211,9 +208,7 @@ class TaskRouterGraph:
             {
                 "retry_reply": "retry_reply",
                 "executor": "executor",
-                "functest": "functest",
-                "accutest": "accutest",
-                "perftest": "perftest",
+                "workflow": "workflow",
             },
         )
         builder.add_conditional_edges(
@@ -221,15 +216,11 @@ class TaskRouterGraph:
             self._pick_execute_node,
             {
                 "executor": "executor",
-                "functest": "functest",
-                "accutest": "accutest",
-                "perftest": "perftest",
+                "workflow": "workflow",
             },
         )
         builder.add_edge("executor", "update")
-        builder.add_edge("functest", "update")
-        builder.add_edge("accutest", "update")
-        builder.add_edge("perftest", "update")
+        builder.add_edge("workflow", "update")
         builder.add_conditional_edges(
             "update",
             self._pick_after_update,
@@ -351,7 +342,7 @@ class TaskRouterGraph:
             "pre_execute_track": [],
         }
 
-    def _pick_after_route(self, state: GraphState) -> Literal["retry_reply", "executor", "functest", "accutest", "perftest"]:
+    def _pick_after_route(self, state: GraphState) -> Literal["retry_reply", "executor", "workflow"]:
         if bool(state.get("retry_phase", False)) and int(state.get("failed_retry_count", 0)) > 0:
             return "retry_reply"
         return self._pick_execute_node(state)
@@ -391,15 +382,11 @@ class TaskRouterGraph:
             ],
         }
 
-    def _pick_execute_node(self, state: GraphState) -> Literal["executor", "functest", "accutest", "perftest"]:
+    def _pick_execute_node(self, state: GraphState) -> Literal["executor", "workflow"]:
         task_type = str(state["task"].type).strip().lower()
         if task_type == "executor":
             return "executor"
-        if task_type in {"functest", "accutest", "perftest"}:
-            return task_type  # type: ignore[return-value]
-        if self._default_task_type == "executor":
-            return "executor"
-        return self._default_task_type  # type: ignore[return-value]
+        return "workflow"
 
     def _executor_step(self, state: GraphState) -> GraphState:
         task, reply, agent_track = executor_node(
@@ -433,25 +420,42 @@ class TaskRouterGraph:
             "pre_execute_track": [],
         }
 
-    def _functest_step(self, state: GraphState) -> GraphState:
-        return self._dispatch_async_workflow_step(
-            state=state,
-            workflow_type="functest",
-            workflow_runner=run_functest_async_workflow,
-        )
+    def _workflow_step(self, state: GraphState) -> GraphState:
+        task_type = str(state["task"].type).strip().lower()
+        workflow_runner = self._workflow_runners.get(task_type)
+        if workflow_runner is None:
+            task = state["task"]
+            task.status = "failed"
+            task.result = f"route failed: unregistered workflow task_type: {task_type!r}"
+            pre_execute_track = state.get("pre_execute_track", [])
+            merged_track = [item for item in pre_execute_track if isinstance(item, dict)] if isinstance(pre_execute_track, list) else []
+            merged_track.append(
+                {
+                    "agent": "graph",
+                    "event": "workflow_route_failed",
+                    "workflow_type": task_type,
+                    "task_status": task.status,
+                    "task_result": task.result,
+                    "return": {
+                        "task_type": task_type,
+                        "registered_workflow_types": sorted(self._workflow_runners),
+                    },
+                }
+            )
+            return {
+                "task": task,
+                "reply": "",
+                "agent_track": merged_track,
+                "workflow_pending": False,
+                "workflow_key": "",
+                "skip_route": False,
+                "pre_execute_track": [],
+            }
 
-    def _accutest_step(self, state: GraphState) -> GraphState:
         return self._dispatch_async_workflow_step(
             state=state,
-            workflow_type="accutest",
-            workflow_runner=run_accutest_async_workflow,
-        )
-
-    def _perftest_step(self, state: GraphState) -> GraphState:
-        return self._dispatch_async_workflow_step(
-            state=state,
-            workflow_type="perftest",
-            workflow_runner=run_perftest_async_workflow,
+            workflow_type=task_type,
+            workflow_runner=workflow_runner,
         )
 
     def _failure_diagnose_step(self, state: GraphState) -> GraphState:
@@ -609,7 +613,7 @@ class TaskRouterGraph:
         *,
         state: GraphState,
         workflow_type: str,
-        workflow_runner: Callable[..., dict[str, str]],
+        workflow_runner: Callable[..., dict[str, Any]],
     ) -> GraphState:
         task = state["task"]
         task_status = str(task.status).strip().lower()
@@ -1129,6 +1133,8 @@ class TaskRouterGraph:
             payload = future.result()
         except Exception as exc:
             return "failed", f"{workflow_type or 'workflow'} async workflow error: {exc}"
+        if not isinstance(payload, dict):
+            return "failed", f"{workflow_type or 'workflow'} async workflow returned non-object result"
 
         status = str(payload.get("task_status", "failed")).strip().lower()
         if status not in {"done", "failed"}:
@@ -1462,12 +1468,11 @@ class TaskRouterGraph:
         if not query:
             return None
 
-        if "functest" in query or "功能测试" in query:
-            return "functest"
-        if "accutest" in query or "精度测试" in query or "准确率" in query:
-            return "accutest"
-        if "perftest" in query or "性能测试" in query or "压测" in query:
-            return "perftest"
+        for task_type, entry in sorted(self._workflow_type_catalog.items()):
+            aliases = [str(task_type).strip().lower()]
+            aliases.extend(str(item).strip().lower() for item in entry.get("status_aliases", []) if str(item).strip())
+            if any(alias and alias in query for alias in aliases):
+                return str(task_type).strip().lower()
         return None
 
     def _filter_collected_items_by_target(
