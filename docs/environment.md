@@ -46,7 +46,7 @@
 
 ### 3.1 dispatch 阶段
 
-当 task 进入异步执行（`functest/accutest/perftest` 或 `executor + skill-mode=pyskill`）：
+当 task 进入异步执行（workflow type skill 或 `executor + skill-mode=pyskill`）：
 
 - source task 立即置为 `status=running`
 - source task 立即写入 `result=正在执行`

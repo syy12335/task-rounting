@@ -18,7 +18,7 @@
 init
   -> collect_workflows
   -> (route | update)
-  -> (executor | functest | accutest | perftest)
+  -> (executor | workflow)
   -> update
   -> (failure_diagnose | route | pre_reply_collect)
   -> final_reply
@@ -54,16 +54,18 @@ init
 - 只负责：`observe` / `generate_task`
 - 输出：`Task + controller_trace`
 - 观察工具含：`read`、`ls`、`build_context_view`、`previous_failed_track`、`beijing_time`、`skill_tool`
-- controller skills 通过 `paths.skills_root/controller/<skill>/SKILL.md` 统一组织
+- controller 插件只支持 workflow task type；`paths.skills_root/controller/<type>/SKILL.md` 中声明 `task-mode: workflow` 后会进入动态 task type 枚举
+- 未命中 workflow type skill 时，controller 生成内置 `executor` task
 - LLM 输入通过 agent memory 组装；在超窗时可触发压缩
 
-### execute（executor/functest/accutest/perftest）
+### execute（executor/workflow）
 
 - execute 节点只产出 `task_status/task_result`，不负责最终用户回复
-- `functest/accutest/perftest` 走异步 dispatch：
+- workflow type skill 走异步 dispatch：
   - 当前 task 立即置为 `running`
   - `result=正在执行`
   - 记录 `dispatch_pyskill` 轨迹
+- 示例 `functest/accutest/perftest` 已迁移为 controller workflow type skills，核心 graph 不再写死这些业务类型
 - `executor` 支持 skill 插件化：
   - 自动扫描 `paths.skills_root/executor/<skill>/SKILL.md`
   - 注入元数据（`name/description/when_to_use/skill-mode/path/allowed-tools`）到 `EXECUTOR_SKILLS_INDEX`

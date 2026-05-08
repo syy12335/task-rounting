@@ -20,7 +20,7 @@
 ```json
 {
   "case_id": "case_01",
-  "task_type": "executor|functest|accutest|perftest",
+  "task_type": "executor|<workflow_type>",
   "task_status": "done|failed|...",
   "task_result": "执行链最终任务结果",
   "reply": "最终面向用户回复（由 reply agent 生成）",
@@ -30,7 +30,7 @@
 
 说明：
 
-- `task_result` 由执行链写入（executor/test/diagnoser）。
+- `task_result` 由执行链写入（executor/workflow/diagnoser）。
 - `reply` 由 `final_reply` 节点统一生成。
 
 ## 3. Environment Full State（落盘）
@@ -66,7 +66,7 @@
               "agent": "controller",
               "action_kind": "observe",
               "tool": "read",
-              "args": {"path": "src/task_router_graph/skills/controller/executor_task/SKILL.md"},
+              "args": {"path": "src/task_router_graph/skills/controller/functest/SKILL.md"},
               "observation": "...",
               "reason": "...",
               "return": "..."

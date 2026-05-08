@@ -8,6 +8,7 @@
 
 - 统一目录规范：`SKILL.md + scripts/ + allowed-tools`
 - 用配置驱动根路径：`paths.skills_root`
+- controller 侧只把 `task-mode=workflow` 的 skill 作为可扩展 workflow task type
 - 把可变工具能力下沉到 skill 脚本，避免全局工具膨胀
 
 本次已移除旧入口：
@@ -42,7 +43,7 @@ paths:
 
 1. 扫描 `<skills_root>/<agent>/**/SKILL.md`
 2. 解析 frontmatter
-3. 校验必填字段：`name/description/when_to_use/allowed-tools`（可选：`skill-mode`）
+3. 校验必填字段：`name/description/when_to_use/allowed-tools`（可选：`skill-mode/task-mode/workflow-entry/status-aliases`）
 4. 校验 `allowed-tools` 为字符串数组
 5. 校验脚本映射：`scripts/<tool>.sh|scripts/<tool>.py`（`.sh` 优先）
 6. 构建 registry 元数据并注入 prompt
@@ -59,14 +60,24 @@ paths:
 - `allowed-tools` 必须且仅 1 个
 - 工具脚本必须为 `.py` 入口
 
+当 controller skill 声明 `task-mode=workflow` 时，要求：
+
+- `name` 就是 controller 输出的 `task_type`
+- `workflow-entry` 必须指向 skill 目录内的 `.py` 文件
+- 入口模块必须暴露 `run(*, task_content: str) -> dict`
+- 返回 dict 至少应包含 `task_status` 与 `task_result`
+
 ## 4. Prompt 注入模型
 
-controller / executor 均注入 skill 元数据（而非正文全文）：
+controller / executor 均注入 skill 元数据（而非正文全文）。controller 只注入 workflow type skills；未命中时固定路由到内置 `executor`。
 
 - `name`
 - `description`
 - `when_to_use`
 - `skill-mode`
+- `task-mode`
+- `workflow-entry`
+- `status-aliases`
 - `path`
 - `allowed-tools`
 

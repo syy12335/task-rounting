@@ -29,6 +29,7 @@
 - `when_to_use`
 - `allowed-tools`
 - 可选 `skill-mode`（默认 `sync`，可选 `pyskill`）
+- controller workflow type skill 可额外声明 `task-mode: workflow`、`workflow-entry: scripts/run.py`、`status-aliases`
 
 示例：
 
@@ -66,6 +67,9 @@ observe 工具新增：`skill_tool(name, input)`。
 
 ## 4. 当前示例
 
+- `controller/functest/SKILL.md`：`task-mode: workflow`，controller 命中后直接进入 workflow
+- `controller/accutest/SKILL.md`：`task-mode: workflow`，示例准确率/质量评估 workflow type
+- `controller/perftest/SKILL.md`：`task-mode: workflow`，示例性能/压测 workflow type
 - `executor/greeting_guide/SKILL.md`：`allowed-tools: []`
 - `executor/time_range_info/SKILL.md`：`allowed-tools: ["web_search"]`
 - `executor/time_range_info/scripts/web_search.py`：承接原全局检索逻辑

@@ -57,8 +57,8 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 └──────────────┬──────────────────────────────┬───────────┘
                │                              │
     ┌──────────▼──────────┐         ┌─────────▼──────────┐
-    │ functest /          │         │      executor       │
-    │ accutest / perftest │         │   需要灵活处理       │
+    │ workflow type skill │         │      executor       │
+    │ 示例：functest 等   │         │   需要灵活处理       │
     └──────────┬──────────┘         └─────────┬──────────┘
                │                              │
     ┌──────────▼──────────┐     ┌─────────────┼──────────────┐
@@ -69,7 +69,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
     └─────────────────────┘     └────────────────────────────┘
 ```
 
-说明：图中的 `functest / accutest / perftest` 是当前仓库内置的占位示例 task family，用于演示高确定性任务的低成本分流路径；实际落地时可替换为你的业务任务类型。
+说明：图中的 `functest / accutest / perftest` 是当前仓库内置的示例 workflow type skill，用于演示高确定性任务的低成本分流路径；实际落地时可新增同格式 controller skill 包来接入你的业务 workflow。
 
 核心直觉是：重试越多、每次 IO 带入的上下文越大，workflow 成本差异就越明显；能用确定性路径解决的任务，越早离开 agentic loop 越划算。
 
@@ -79,7 +79,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 
 | 执行层 | 额外 LLM 消耗 | 说明 |
 |--------|---------------|------|
-| 内置示例 task type（`functest / accutest / perftest`） | 极低 | controller 路由后直接 dispatch 到 `ThreadPoolExecutor`，执行阶段不再进入 executor loop |
+| workflow type skill（示例：`functest / accutest / perftest`） | 极低 | controller 路由后直接 dispatch 到 `ThreadPoolExecutor`，执行阶段不再进入 executor loop |
 | pyskill（`skill-mode=pyskill`） | 极少 | LLM 只参与“是否启动该 skill”，实际执行由 subprocess 异步完成 |
 | sync skill（`skill-mode=sync`） | 少 | LLM 决策命中 skill，具体执行由脚本完成 |
 | executor 自由发挥 | 最多 | 进入完整 executor agentic loop（默认 `max_steps=4`） |
@@ -206,10 +206,10 @@ python -m pytest
 
 ## 局限性
 
-- token 节省比例依赖确定性任务分布：Controller 一次分流命中的高确定性任务越多，节省越明显；README 里用 `functest / accutest / perftest` 作为示例 task family 来说明这件事。如果大多数任务都落到 executor，自然收益会变小
+- token 节省比例依赖确定性任务分布：Controller 一次分流命中的 workflow type skill 越多，节省越明显；README 里用 `functest / accutest / perftest` 作为示例来说明这件事。如果大多数任务都落到 executor，自然收益会变小
 - pyskill / sync skill 需要人工维护：确定性场景越多，配套脚本也越需要持续演进
 - 评测集规模还小：当前评测依赖 `src/task_router_graph_train/assets/manual_protocol_v1/` 的 `holdout` split，适合机制验证，不代表全量线上分布
-- 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是占位示例；迁移到其他工程场景时，需要重新定义 task type、skill 和失败治理口径
+- 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是示例 workflow type skill；迁移到其他工程场景时，需要新增或替换 controller workflow skill 包
 
 ## 文档
 
@@ -228,7 +228,7 @@ python -m pytest
 ## 更新计划
 
 - 当前 DPO 回流改造已完成代码侧切换，下一步需要补一轮真实训练链路测试，重点验证截断配置、`prompt/chosen/rejected` 长度分布和超长样本处理。
-- 双重截留的确定性判断需要插件化：当前 `functest / accutest / perftest` 等确定性分流仍偏硬编码，后续要改成可注册、可替换的插件机制。
+- 继续完善 workflow type skill 的接入文档与示例，让用户新增一个 controller skill 包即可接入自己的 workflow。
 - 运行时侧继续细化 Environment 中的 trace / track：补齐更稳定的事件结构、视图裁剪和排障读取口径。
 - 细化 Environment 压缩机制：history / view 压缩要依据当前 task 的目标、状态和证据需求选择保留内容，不能无目的地压缩。
 - 优化 agent 策略以提高 KV-cache 命中率：收敛 prompt 稳定前缀、agent 调度和上下文注入顺序，减少可复用 cache 被动态片段打断。
