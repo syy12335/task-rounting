@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from task_router_graph.agents.skill_registry import build_skill_registry_text, load_workflow_type_catalog
 from task_router_graph.schema import Environment, validate_controller_action_dict
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -45,7 +46,13 @@ def resolve_controller_state_view_from_config(config: dict[str, Any] | None = No
 
 
 def validate_runtime_controller_action(action: dict[str, Any]) -> tuple[bool, list[str]]:
-    return validate_controller_action_dict(action)
+    task_types = _runtime_controller_task_types(workspace_root=REPO_ROOT, skills_root=DEFAULT_RUNTIME_SKILLS_ROOT)
+    return validate_controller_action_dict(action, task_types=task_types)
+
+
+def _runtime_controller_task_types(*, workspace_root: Path, skills_root: str) -> tuple[str, ...]:
+    catalog = load_workflow_type_catalog(workspace_root=workspace_root, skills_root=skills_root)
+    return ("executor", *sorted(str(entry.get("name", "")).strip().lower() for entry in catalog.values()))
 
 
 def build_controller_state_input(
@@ -107,6 +114,10 @@ def _resolve_runtime_root(workspace_root: Path | None) -> Path:
 def _build_skill_registry_preview(*, workspace_root: Path, skills_root: str, agent: str) -> str:
     # skill registry preview 只是训练态的技能元信息摘要，
     # 用来帮助模型理解“有哪些候选技能”，不是运行时真实执行结果。
+    if agent == "controller":
+        catalog = load_workflow_type_catalog(workspace_root=workspace_root, skills_root=skills_root)
+        return build_skill_registry_text(catalog=catalog, agent=agent)
+
     agent_root = (workspace_root / skills_root / agent).resolve()
     entries: list[dict[str, Any]] = []
     if not agent_root.exists():

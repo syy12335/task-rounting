@@ -8,7 +8,12 @@ from jsonschema import ValidationError
 from .agent_utils import extract_text, merge_invoke_config, parse_json_object, replace_last
 from .memory import AgentMemory, ContextCompressionOptions
 from ..token_usage import TokenUsageRecorder, invoke_with_usage
-from ..schema import CONTROLLER_ACTION_SCHEMA, CONTROLLER_OUTPUT_CONSTRAINTS, validate_controller_action_payload
+from ..schema import (
+    build_controller_action_schema,
+    build_controller_output_constraints,
+    normalize_controller_task_types,
+    validate_controller_action_payload,
+)
 
 
 class ControllerRouteError(ValueError):
@@ -26,12 +31,14 @@ class ControllerAgent:
         max_steps: int = 3,
         context_options: ContextCompressionOptions | None = None,
         usage_recorder: TokenUsageRecorder | None = None,
+        allowed_task_types: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         self.llm = llm
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         self.context_options = context_options or ContextCompressionOptions()
         self.usage_recorder = usage_recorder
+        self.allowed_task_types = normalize_controller_task_types(allowed_task_types)
 
     def run(
         self,
@@ -48,13 +55,15 @@ class ControllerAgent:
             tasks=tasks,
             skills_index=skills_index,
         )
+        action_schema = build_controller_action_schema(self.allowed_task_types)
+        output_constraints = build_controller_output_constraints(self.allowed_task_types)
         llm = self.llm.bind(
             response_format={
                     "type": "json_schema",
                     "json_schema": {
                         "name": "controller_action",
                         "strict": True,
-                        "schema": CONTROLLER_ACTION_SCHEMA,
+                        "schema": action_schema,
                     },
                 }
         )
@@ -84,7 +93,7 @@ class ControllerAgent:
                     {
                         "step": step,
                         "observations": observations,
-                        "output_constraints": CONTROLLER_OUTPUT_CONSTRAINTS,
+                        "output_constraints": output_constraints,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -107,7 +116,7 @@ class ControllerAgent:
                 action["action_kind"] = action_kind
 
             try:
-                _validate_controller_action(action)
+                _validate_controller_action(action, allowed_task_types=self.allowed_task_types)
             except ValidationError as exc:
                 raise ControllerRouteError(
                     f"Invalid controller action schema: {exc.message}",
@@ -178,8 +187,8 @@ class ControllerAgent:
         return rendered
 
 
-def _validate_controller_action(action: dict[str, Any]) -> None:
-    validate_controller_action_payload(action)
+def _validate_controller_action(action: dict[str, Any], *, allowed_task_types: tuple[str, ...]) -> None:
+    validate_controller_action_payload(action, task_types=allowed_task_types)
 
 
 def _normalize_action_kind(action: dict[str, Any]) -> str:
@@ -215,6 +224,7 @@ def route_task(
     context_options: ContextCompressionOptions | None = None,
     recent_rounds_payload: list[dict[str, Any]] | None = None,
     usage_recorder: TokenUsageRecorder | None = None,
+    allowed_task_types: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
     return ControllerAgent(
         llm=llm,
@@ -222,6 +232,7 @@ def route_task(
         max_steps=max_steps,
         context_options=context_options,
         usage_recorder=usage_recorder,
+        allowed_task_types=allowed_task_types,
     ).run(
         user_input=user_input,
         tasks=tasks,

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from importlib import util as importlib_util
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -13,6 +14,10 @@ REQUIRED_FRONTMATTER_FIELDS = ("name", "description", "when_to_use", FM_ALLOWED_
 SKILL_MODE_FIELD = "skill-mode"
 SKILL_MODE_SYNC = "sync"
 SKILL_MODE_PYSKILL = "pyskill"
+TASK_MODE_FIELD = "task-mode"
+TASK_MODE_WORKFLOW = "workflow"
+WORKFLOW_ENTRY_FIELD = "workflow-entry"
+STATUS_ALIASES_FIELD = "status-aliases"
 
 
 class SkillRegistryError(ValueError):
@@ -96,6 +101,69 @@ def _validate_skill_mode(raw: Any, *, skill_path: Path) -> str:
     )
 
 
+def _validate_task_mode(raw: Any, *, skill_path: Path) -> str:
+    if raw is None:
+        return ""
+    mode = str(raw).strip().lower()
+    if not mode:
+        return ""
+    if mode == TASK_MODE_WORKFLOW:
+        return mode
+    raise SkillRegistryError(f"{TASK_MODE_FIELD} must be '{TASK_MODE_WORKFLOW}' when set: {skill_path}")
+
+
+def _validate_workflow_type_name(name: str, *, skill_path: Path) -> None:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
+        raise SkillRegistryError(
+            f"workflow skill name must be a lowercase task_type matching [a-z][a-z0-9_-]*: {skill_path}"
+        )
+
+
+def _validate_workflow_entry(raw: Any, *, skill_dir: Path, workspace_root: Path, skill_path: Path) -> tuple[str, str]:
+    entry = str(raw or "").strip()
+    if not entry:
+        raise SkillRegistryError(f"missing required field '{WORKFLOW_ENTRY_FIELD}' for workflow skill: {skill_path}")
+
+    entry_path = Path(entry)
+    if entry_path.is_absolute():
+        target = entry_path.resolve()
+    else:
+        target = (skill_dir / entry).resolve()
+
+    try:
+        target.relative_to(skill_dir.resolve())
+    except ValueError as exc:
+        raise SkillRegistryError(f"{WORKFLOW_ENTRY_FIELD} must stay inside the skill directory: {skill_path}") from exc
+
+    if not target.exists() or not target.is_file():
+        raise SkillRegistryError(f"{WORKFLOW_ENTRY_FIELD} not found: {target}")
+    if target.suffix != ".py":
+        raise SkillRegistryError(f"{WORKFLOW_ENTRY_FIELD} must point to a python file: {target}")
+
+    return target.relative_to(workspace_root).as_posix(), str(target)
+
+
+def _validate_status_aliases(raw: Any, *, skill_path: Path) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SkillRegistryError(f"{STATUS_ALIASES_FIELD} must be a string array: {skill_path}")
+
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise SkillRegistryError(f"{STATUS_ALIASES_FIELD} must be a string array: {skill_path}")
+        alias = item.strip().lower()
+        if not alias:
+            raise SkillRegistryError(f"{STATUS_ALIASES_FIELD} contains empty alias: {skill_path}")
+        if alias in seen:
+            raise SkillRegistryError(f"{STATUS_ALIASES_FIELD} contains duplicate alias '{alias}': {skill_path}")
+        seen.add(alias)
+        aliases.append(alias)
+    return aliases
+
+
 def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) -> dict[str, dict[str, Any]]:
     agent_root = (workspace_root / skills_root / agent).resolve()
     if not agent_root.exists() or not agent_root.is_dir():
@@ -121,7 +189,9 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
         description = str(frontmatter.get("description", "")).strip()
         when_to_use = str(frontmatter.get("when_to_use", "")).strip()
         skill_mode = _validate_skill_mode(frontmatter.get(SKILL_MODE_FIELD), skill_path=skill_file)
+        task_mode = _validate_task_mode(frontmatter.get(TASK_MODE_FIELD), skill_path=skill_file)
         allowed_tools = _validate_allowed_tools(frontmatter.get(FM_ALLOWED_TOOLS), skill_path=skill_file)
+        status_aliases = _validate_status_aliases(frontmatter.get(STATUS_ALIASES_FIELD), skill_path=skill_file)
 
         if not name:
             raise SkillRegistryError(f"field 'name' must be non-empty: {skill_file}")
@@ -132,6 +202,18 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
         if skill_mode == SKILL_MODE_PYSKILL and len(allowed_tools) != 1:
             raise SkillRegistryError(
                 f"{SKILL_MODE_FIELD}=pyskill requires exactly one allowed tool: {skill_file}"
+            )
+        workflow_entry = ""
+        workflow_entry_abs = ""
+        if task_mode == TASK_MODE_WORKFLOW:
+            if agent != "controller":
+                raise SkillRegistryError(f"{TASK_MODE_FIELD}=workflow is only supported for controller skills: {skill_file}")
+            _validate_workflow_type_name(name, skill_path=skill_file)
+            workflow_entry, workflow_entry_abs = _validate_workflow_entry(
+                frontmatter.get(WORKFLOW_ENTRY_FIELD),
+                skill_dir=skill_dir,
+                workspace_root=workspace_root,
+                skill_path=skill_file,
             )
 
         normalized_key = normalize_skill_key(name)
@@ -158,6 +240,10 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
             "description": description,
             "when_to_use": when_to_use,
             "skill_mode": skill_mode,
+            "task_mode": task_mode,
+            "workflow_entry": workflow_entry,
+            "workflow_entry_abs": workflow_entry_abs,
+            "status_aliases": status_aliases,
             "allowed_tools": list(allowed_tools),
             "path": skill_file.relative_to(workspace_root).as_posix(),
             "skill_dir": skill_dir.relative_to(workspace_root).as_posix(),
@@ -170,20 +256,64 @@ def load_skill_catalog(*, workspace_root: Path, skills_root: str, agent: str) ->
     return catalog
 
 
+def load_workflow_type_catalog(*, workspace_root: Path, skills_root: str) -> dict[str, dict[str, Any]]:
+    catalog = load_skill_catalog(workspace_root=workspace_root, skills_root=skills_root, agent="controller")
+    workflow_catalog: dict[str, dict[str, Any]] = {}
+    for entry in catalog.values():
+        if str(entry.get("task_mode", "")).strip().lower() != TASK_MODE_WORKFLOW:
+            continue
+        task_type = str(entry.get("name", "")).strip().lower()
+        if task_type == "executor":
+            raise SkillRegistryError("workflow task type 'executor' is reserved for the built-in executor")
+        if task_type in workflow_catalog:
+            other = workflow_catalog[task_type].get("path", "")
+            raise SkillRegistryError(f"duplicate workflow task type: {task_type!r}; conflicts with {other}")
+        workflow_catalog[task_type] = dict(entry)
+    return workflow_catalog
+
+
+def load_workflow_runner(entry: dict[str, Any]) -> Callable[..., dict[str, Any]]:
+    workflow_entry_abs = str(entry.get("workflow_entry_abs", "")).strip()
+    task_type = str(entry.get("name", "")).strip() or str(entry.get("key", "")).strip() or "workflow"
+    if not workflow_entry_abs:
+        raise SkillRegistryError(f"workflow task type {task_type!r} missing workflow entry")
+
+    module_path = Path(workflow_entry_abs).resolve()
+    module_name = f"_task_router_workflow_{normalize_skill_key(task_type).replace('-', '_')}_{abs(hash(str(module_path)))}"
+    spec = importlib_util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise SkillRegistryError(f"failed to load workflow entry for {task_type!r}: {module_path}")
+
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = getattr(module, "run", None)
+    if not callable(runner):
+        raise SkillRegistryError(f"workflow entry for {task_type!r} must expose callable run(*, task_content: str)")
+    return runner
+
+
 def build_skill_registry_text(*, catalog: dict[str, dict[str, Any]], agent: str) -> str:
     title = f"### {agent.capitalize()} Skill Registry (Metadata For Selection)"
     entries: list[dict[str, Any]] = []
 
     for entry in sorted(catalog.values(), key=lambda item: str(item.get("name", "")).lower()):
-        entries.append(
-            {
-                "name": str(entry.get("name", "")).strip(),
-                "description": str(entry.get("description", "")).strip(),
-                "when_to_use": str(entry.get("when_to_use", "")).strip(),
-                SKILL_MODE_FIELD: str(entry.get("skill_mode", SKILL_MODE_SYNC)).strip() or SKILL_MODE_SYNC,
-                "path": str(entry.get("path", "")).strip(),
-                FM_ALLOWED_TOOLS: list(entry.get("allowed_tools", [])),
-            }
-        )
+        item = {
+            "name": str(entry.get("name", "")).strip(),
+            "description": str(entry.get("description", "")).strip(),
+            "when_to_use": str(entry.get("when_to_use", "")).strip(),
+            SKILL_MODE_FIELD: str(entry.get("skill_mode", SKILL_MODE_SYNC)).strip() or SKILL_MODE_SYNC,
+            "path": str(entry.get("path", "")).strip(),
+            FM_ALLOWED_TOOLS: list(entry.get("allowed_tools", [])),
+        }
+        task_mode = str(entry.get("task_mode", "")).strip()
+        if task_mode:
+            item[TASK_MODE_FIELD] = task_mode
+        workflow_entry = str(entry.get("workflow_entry", "")).strip()
+        if workflow_entry:
+            item[WORKFLOW_ENTRY_FIELD] = workflow_entry
+        status_aliases = list(entry.get("status_aliases", []))
+        if status_aliases:
+            item[STATUS_ALIASES_FIELD] = status_aliases
+        entries.append(item)
 
     return "\n\n".join([title, json.dumps(entries, ensure_ascii=False, indent=2)]).strip()

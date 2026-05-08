@@ -29,14 +29,10 @@ from .agents.memory import ContextCompressionOptions
 from .agents.skill_registry import (
     build_skill_registry_text,
     load_skill_catalog,
+    load_workflow_type_catalog,
     normalize_skill_key,
 )
 from .agents.pyskill_runtime import PYSKILL_RUNTIME
-from .agents.async_workflows import (
-    run_accutest_async_workflow,
-    run_functest_async_workflow,
-    run_perftest_async_workflow,
-)
 from .schema import ControllerAction, Environment, Task
 from .token_usage import TokenUsageRecorder
 
@@ -49,7 +45,6 @@ SKILL_TOOL_SUCCESS_STDOUT_MAX_CHARS = 24000
 SKILL_TOOL_FAILED_STDOUT_MAX_CHARS = 8000
 SKILL_TOOL_FAILED_STDERR_MAX_CHARS = 8000
 SKILL_TOOL_EXCEPTION_MSG_MAX_CHARS = 2000
-ALLOWED_TASK_TYPES = {"executor", "functest", "accutest", "perftest"}
 
 
 def _json_dump(payload: Any) -> str:
@@ -729,10 +724,9 @@ def route_node(
 ) -> tuple[Task, list[ControllerAction]]:
     context_options = context_options or ContextCompressionOptions()
     try:
-        controller_catalog = load_skill_catalog(
+        controller_catalog = load_workflow_type_catalog(
             workspace_root=workspace_root,
             skills_root=skills_root,
-            agent="controller",
         )
     except Exception as exc:
         task = _build_route_failed_task(user_input=user_input, reason=f"controller skills load failed: {exc}")
@@ -745,6 +739,7 @@ def route_node(
         ]
         return task, controller_trace
 
+    allowed_task_types = ("executor", *sorted(str(entry.get("name", "")).strip().lower() for entry in controller_catalog.values()))
     controller_skills_index = build_skill_registry_text(catalog=controller_catalog, agent="controller")
     skill_runtime = SkillToolRuntime(
         workspace_root=workspace_root,
@@ -776,6 +771,7 @@ def route_node(
             context_options=context_options,
             recent_rounds_payload=recent_rounds_payload,
             usage_recorder=usage_recorder,
+            allowed_task_types=allowed_task_types,
         )
     except ControllerRouteError as exc:
         task = _build_route_failed_task(user_input=user_input, reason=str(exc))
@@ -803,7 +799,7 @@ def route_node(
     task_content = str(route_result.get("task_content", "")).strip()
     controller_trace = _build_controller_trace(route_result)
 
-    if task_type not in ALLOWED_TASK_TYPES:
+    if task_type not in set(allowed_task_types):
         task = _build_route_failed_task(user_input=user_input, reason=f"invalid task_type: {task_type!r}")
         return task, controller_trace
 
@@ -996,54 +992,6 @@ def executor_node(
         )
     executor_trace.extend(_build_executor_track(executor="executor", event="execute", task=task))
     return task, reply, executor_trace
-
-
-def functest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
-    skipped = _try_skip_execute(task, stage="functest")
-    if skipped is not None:
-        skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_executor_track(executor="functest_async_workflow", event="workflow_skip", task=skipped_task)
-
-    try:
-        result = run_functest_async_workflow(task_content=task.content)
-    except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"functest async workflow error: {exc}"}
-    task.status = str(result.get("task_status", "failed")).strip() or "failed"
-    task.result = str(result.get("task_result", "")).strip()
-    reply = ""
-    return task, reply, _build_executor_track(executor="functest_async_workflow", event="workflow_execute", task=task)
-
-
-def accutest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
-    skipped = _try_skip_execute(task, stage="accutest")
-    if skipped is not None:
-        skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_executor_track(executor="accutest_async_workflow", event="workflow_skip", task=skipped_task)
-
-    try:
-        result = run_accutest_async_workflow(task_content=task.content)
-    except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"accutest async workflow error: {exc}"}
-    task.status = str(result.get("task_status", "failed")).strip() or "failed"
-    task.result = str(result.get("task_result", "")).strip()
-    reply = ""
-    return task, reply, _build_executor_track(executor="accutest_async_workflow", event="workflow_execute", task=task)
-
-
-def perftest_node(*, task: Task) -> tuple[Task, str, list[dict[str, Any]]]:
-    skipped = _try_skip_execute(task, stage="perftest")
-    if skipped is not None:
-        skipped_task, skipped_reply = skipped
-        return skipped_task, skipped_reply, _build_executor_track(executor="perftest_async_workflow", event="workflow_skip", task=skipped_task)
-
-    try:
-        result = run_perftest_async_workflow(task_content=task.content)
-    except Exception as exc:
-        result = {"task_status": "failed", "task_result": f"perftest async workflow error: {exc}"}
-    task.status = str(result.get("task_status", "failed")).strip() or "failed"
-    task.result = str(result.get("task_result", "")).strip()
-    reply = ""
-    return task, reply, _build_executor_track(executor="perftest_async_workflow", event="workflow_execute", task=task)
 
 
 def failure_diagnosis_node(

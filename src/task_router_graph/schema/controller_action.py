@@ -131,59 +131,97 @@ CONTROLLER_ALLOWED_OBSERVE_TOOLS = (
     "beijing_time",
     TOOL_SKILL_TOOL,
 )
-CONTROLLER_ALLOWED_TASK_TYPES = ("executor", "functest", "accutest", "perftest")
+CONTROLLER_ALLOWED_TASK_TYPES = ("executor",)
 
-CONTROLLER_ACTION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "oneOf": [
-        _OBSERVE_READ_SCHEMA,
-        _OBSERVE_LS_SCHEMA,
-        _OBSERVE_BUILD_VIEW_SCHEMA,
-        _OBSERVE_PREVIOUS_FAILED_TRACK_SCHEMA,
-        _OBSERVE_BEIJING_TIME_SCHEMA,
-        _OBSERVE_SKILL_TOOL_SCHEMA,
-        {
-            "type": "object",
-            "properties": {
-                "action_kind": {"const": "generate_task"},
-                "task_type": {
-                    "type": "string",
-                    "enum": list(CONTROLLER_ALLOWED_TASK_TYPES),
+
+def normalize_controller_task_types(task_types: tuple[str, ...] | list[str] | None = None) -> tuple[str, ...]:
+    raw_values = task_types or CONTROLLER_ALLOWED_TASK_TYPES
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        task_type = str(item).strip().lower()
+        if not task_type or task_type in seen:
+            continue
+        seen.add(task_type)
+        normalized.append(task_type)
+
+    if "executor" not in seen:
+        normalized.insert(0, "executor")
+    elif normalized[0] != "executor":
+        normalized = ["executor", *[item for item in normalized if item != "executor"]]
+
+    return tuple(normalized)
+
+
+def build_controller_action_schema(task_types: tuple[str, ...] | list[str] | None = None) -> dict[str, Any]:
+    allowed_task_types = normalize_controller_task_types(task_types)
+    return {
+        "type": "object",
+        "oneOf": [
+            _OBSERVE_READ_SCHEMA,
+            _OBSERVE_LS_SCHEMA,
+            _OBSERVE_BUILD_VIEW_SCHEMA,
+            _OBSERVE_PREVIOUS_FAILED_TRACK_SCHEMA,
+            _OBSERVE_BEIJING_TIME_SCHEMA,
+            _OBSERVE_SKILL_TOOL_SCHEMA,
+            {
+                "type": "object",
+                "properties": {
+                    "action_kind": {"const": "generate_task"},
+                    "task_type": {
+                        "type": "string",
+                        "enum": list(allowed_task_types),
+                    },
+                    "task_content": {"type": "string", "minLength": 1},
+                    "reason": {"type": "string", "minLength": 1},
                 },
-                "task_content": {"type": "string", "minLength": 1},
-                "reason": {"type": "string", "minLength": 1},
+                "required": ["action_kind", "task_type", "task_content", "reason"],
+                "additionalProperties": False,
             },
-            "required": ["action_kind", "task_type", "task_content", "reason"],
-            "additionalProperties": False,
+        ],
+    }
+
+
+def build_controller_output_constraints(task_types: tuple[str, ...] | list[str] | None = None) -> dict[str, Any]:
+    allowed_task_types = normalize_controller_task_types(task_types)
+    return {
+        "output_format": "json_object",
+        "action_kind_enum": list(CONTROLLER_ALLOWED_ACTION_KINDS),
+        "observe_required": ["action_kind", "tool", "args", "reason"],
+        "observe_tool_enum": list(CONTROLLER_ALLOWED_OBSERVE_TOOLS),
+        "generate_task_required": ["action_kind", "task_type", "task_content", "reason"],
+        "task_type_enum": list(allowed_task_types),
+        "forbid_additional_properties": True,
+        "observe_tool_args_required": {
+            "read": ["path"],
+            "ls": ["path"],
+            "build_context_view": [],
+            "previous_failed_track": [],
+            "beijing_time": [],
+            TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
         },
-    ],
-}
-
-CONTROLLER_OUTPUT_CONSTRAINTS: dict[str, Any] = {
-    "output_format": "json_object",
-    "action_kind_enum": list(CONTROLLER_ALLOWED_ACTION_KINDS),
-    "observe_required": ["action_kind", "tool", "args", "reason"],
-    "observe_tool_enum": list(CONTROLLER_ALLOWED_OBSERVE_TOOLS),
-    "generate_task_required": ["action_kind", "task_type", "task_content", "reason"],
-    "forbid_additional_properties": True,
-    "observe_tool_args_required": {
-        "read": ["path"],
-        "ls": ["path"],
-        "build_context_view": [],
-        "previous_failed_track": [],
-        "beijing_time": [],
-        TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
-    },
-}
+    }
 
 
-def validate_controller_action_payload(action: dict[str, Any]) -> None:
-    validate(instance=action, schema=CONTROLLER_ACTION_SCHEMA)
+CONTROLLER_ACTION_SCHEMA: dict[str, Any] = build_controller_action_schema(CONTROLLER_ALLOWED_TASK_TYPES)
+CONTROLLER_OUTPUT_CONSTRAINTS: dict[str, Any] = build_controller_output_constraints(CONTROLLER_ALLOWED_TASK_TYPES)
 
 
-def validate_controller_action_dict(action: dict[str, Any]) -> tuple[bool, list[str]]:
+def validate_controller_action_payload(
+    action: dict[str, Any],
+    *,
+    task_types: tuple[str, ...] | list[str] | None = None,
+) -> None:
+    validate(instance=action, schema=build_controller_action_schema(task_types))
+
+
+def validate_controller_action_dict(
+    action: dict[str, Any],
+    *,
+    task_types: tuple[str, ...] | list[str] | None = None,
+) -> tuple[bool, list[str]]:
     try:
-        validate_controller_action_payload(action)
+        validate_controller_action_payload(action, task_types=task_types)
     except ValidationError as exc:
         return False, [exc.message]
     return True, []

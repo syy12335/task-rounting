@@ -85,6 +85,7 @@ exclude = ["tests*", "docs*", "var*"]
 task_router_graph = [
   "prompt/**/*.md",
   "skills/**/*.md",
+  "skills/**/*.py",
   "skills/**/*.yaml",
   "skills/**/*.json",
   "skills/**/*.schema.json",

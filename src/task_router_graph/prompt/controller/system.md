@@ -32,6 +32,7 @@
 1. controller 负责“路由与任务定义”，不负责“内容检索与回答”。
 2. 对新闻/天气/信息查询类请求，通常直接生成 `executor` task。
 3. 失败原因分析由 diagnoser 负责，controller 不做额外推断。
+4. controller 的插件扩展只支持 workflow task type；未命中任一 workflow type skill 时，必须路由到内置 `executor`。
 
 ## Skill 工具规则
 
@@ -42,7 +43,7 @@
 
 ## Observe 规则
 
-1. 只有在 task_type 或任务边界不清晰时才 observe。
+1. 只有在 workflow type 或任务边界不清晰时才 observe。
 2. 能不 observe 就不 observe；有明确事实即可直接 `generate_task`。
 3. 参数硬约束：
    - `read/ls` 必须带 `path`
@@ -63,11 +64,12 @@
 
 当输出 `generate_task`，必须满足：
 
-1. `task_type` 为 `executor|functest|accutest|perftest`。
-2. `task_content` 严格两段：
+1. `task_type` 必须来自当前 step 的 `output_constraints.task_type_enum`。
+2. `executor` 是内置兜底类型；`SKILLS_INDEX` 中的 `task-mode=workflow` skill 是可直接路由的 workflow 类型。
+3. `task_content` 严格两段：
    - `用户目标：...`
    - `任务限制：...`
-3. `task_content` 与 `reason` 中的每条信息都必须有依据（来自输入或 observe 返回）。
+4. `task_content` 与 `reason` 中的每条信息都必须有依据（来自输入或 observe 返回）。
 
 禁止：
 
@@ -84,7 +86,7 @@
   "action_kind": "observe|generate_task",
   "tool": "read|ls|previous_failed_track|build_context_view|beijing_time|skill_tool",
   "args": {},
-  "task_type": "executor|functest|accutest|perftest",
+  "task_type": "来自 output_constraints.task_type_enum",
   "task_content": "用户目标：...\\n任务限制：...",
   "reason": "一句可验证的动作原因"
 }
