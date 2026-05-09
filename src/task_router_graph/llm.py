@@ -4,6 +4,8 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+from .provider_config import resolve_provider_value, resolved_provider_cfg
+
 
 def resolve_provider_and_model(config: dict[str, Any]) -> tuple[str, str]:
     model_cfg = config.get("model")
@@ -31,7 +33,7 @@ def resolve_provider_and_model(config: dict[str, Any]) -> tuple[str, str]:
             f"Supported providers: {supported}"
         )
 
-    model_name = str(provider_cfg.get("name", "")).strip()
+    model_name = resolve_provider_value(provider_cfg, "name")
     if not model_name:
         raise ValueError(f"Provider {selected_provider} missing model name")
 
@@ -75,7 +77,7 @@ def build_chat_model(config: dict[str, Any]) -> Any:
 
     model_cfg = config["model"]
     providers = model_cfg["providers"]
-    provider_cfg = providers[selected_provider]
+    provider_cfg = resolved_provider_cfg(providers[selected_provider])
 
     base_url = str(provider_cfg.get("base_url", "")).strip()
     if not base_url:

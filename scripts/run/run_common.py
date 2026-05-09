@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import yaml
+from task_router_graph.provider_config import resolve_provider_value, resolved_provider_cfg
 
 T = TypeVar("T")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -306,6 +307,7 @@ def _is_sglang_available(providers: dict[str, Any]) -> bool:
     if not isinstance(sglang_cfg, dict):
         return False
 
+    sglang_cfg = resolved_provider_cfg(sglang_cfg)
     base_url = str(sglang_cfg.get("base_url", "")).strip()
     if not base_url:
         return False
@@ -438,7 +440,7 @@ def ensure_preferred_provider_and_log(config_path: str | Path) -> tuple[str, str
     provider_cfg = providers.get(selected)
     model_name = ""
     if isinstance(provider_cfg, dict):
-        model_name = str(provider_cfg.get("name", "")).strip()
+        model_name = resolve_provider_value(provider_cfg, "name")
 
     log(
         "Provider selected before startup: "
