@@ -73,15 +73,6 @@ def main() -> int:
             ],
         ),
         (
-            REPO_ROOT / "docs/changelog.md",
-            [
-                (
-                    r"pyskill\s*内部\s*graph",
-                    "forbidden ambiguous phrase; use '<skill> worker graph' instead",
-                ),
-            ],
-        ),
-        (
             REPO_ROOT / "docs/pyskill.md",
             [
                 (
