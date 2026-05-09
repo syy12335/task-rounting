@@ -223,4 +223,3 @@ python -m pytest
 - `src/task_router_graph_train/README.md`：controller 的 environment-grounded 后训练闭环
 - `src/task_router_graph_train/docs/grpo_dpo_loop_v1.md`：controller 的 GRPO / DPO 下一阶段方案
 - `docs/data_format.md`：输入输出与样本格式
-- `docs/changelog.md`：近期更新

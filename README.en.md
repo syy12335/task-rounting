@@ -221,4 +221,3 @@ GitHub Actions currently runs the base pytest suite on push and pull request. Po
 - `src/task_router_graph_train/README.md`: environment-grounded controller post-training loop
 - `src/task_router_graph_train/docs/grpo_dpo_loop_v1.md`: next-stage GRPO / DPO plan for the controller
 - `docs/data_format.md`: input/output and sample formats
-- `docs/changelog.md`: recent changes

@@ -8,7 +8,6 @@
 - Track 机制：`docs/track.md`
 - Agent Memory 与视图压缩：`docs/agent_memory.md`
 - 数据格式：`docs/data_format.md`
-- 近期更新：`docs/changelog.md`
 
 说明：实现以 `src/task_router_graph/` 代码为准；文档用于对齐语义与协作口径。
 
