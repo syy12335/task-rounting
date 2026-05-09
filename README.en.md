@@ -146,10 +146,13 @@ export EMBEDDING_PROVIDER=aliyun
 export API_KEY_Qwen=<your_key>
 
 # Optional: use local SGLang
+# export SGLANG_BASE_URL=http://127.0.0.1:30000/v1
+# export SGLANG_MODEL=qwen3-4b
 # export SGLANG_MODEL_PATH=path/to/Qwen3-4B
-# export SGLANG_SERVED_MODEL_NAME=qwen3-4b
 # export SGLANG_API_KEY=EMPTY
 # ./scripts/sglang/start.sh
+# You can also pin the conda env explicitly; otherwise the current CONDA_DEFAULT_ENV is preferred
+# ./scripts/sglang/start.sh --conda-env task-routing-online
 # ./scripts/sglang/status.sh
 # export MODEL_PROVIDER=sglang
 # export EMBEDDING_PROVIDER=aliyun
