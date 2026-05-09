@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-Environment-Runtime is a task routing runtime for engineering agents. It routes high-certainty tasks to fixed workflows / skills early, leaves low-certainty tasks to a full executor loop, and supports async long-running work with structured result collection.
+Environment-Runtime is a lightweight Agent Runtime for engineering scenarios. It comes from the gap we saw when applying OpenClaw to engineering workflows: the runtime can be too heavy, waiting can feel poor, and stability can be hard to maintain. The project aims to make common engineering tasks easier to organize, reuse, and operate. It is still growing; issues and PRs are welcome.
 
 It is useful when:
 

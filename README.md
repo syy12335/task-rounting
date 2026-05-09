@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-Environment-Runtime 是一个面向工程型 agent 的任务路由运行时：把高确定性任务提前分流到固定 workflow / skill，把低确定性任务留给完整 executor loop，从而降低 token 消耗、减少幻觉，并让长任务可以异步运行和回填。
+Environment-Runtime 是一个面向工程场景的轻量级 Agent Runtime。它源于 OpenClaw 在工程流程落地时偏重、等待体验不理想、稳定性不足的问题，希望把常见工程任务组织成更清晰、更可复用、更容易维护的运行时。项目还在成长阶段，欢迎认领 issue、提交 PR，一起参与开发。
 
 它适合这类场景：
 
