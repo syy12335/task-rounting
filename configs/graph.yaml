@@ -16,8 +16,10 @@ model:
 
     sglang:
       name: qwen3-4b
+      name_env: SGLANG_MODEL
       api_key_env: SGLANG_API_KEY
       base_url: http://127.0.0.1:30000/v1
+      base_url_env: SGLANG_BASE_URL
       max_tokens: 2048
 
 embedding:
@@ -37,6 +39,7 @@ embedding:
       name: text-embedding-v3
       api_key_env: SGLANG_API_KEY
       base_url: http://127.0.0.1:30000/v1
+      base_url_env: SGLANG_BASE_URL
       request_timeout_sec: 60
 
 paths:

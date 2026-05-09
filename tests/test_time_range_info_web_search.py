@@ -96,6 +96,50 @@ def test_workflow_recursion_limit_keeps_default_floor() -> None:
     assert module._workflow_recursion_limit(max_iterations=1) == 25
 
 
+def test_load_runtime_configs_uses_name_and_base_url_env(monkeypatch, tmp_path) -> None:
+    module = _load_web_search_module()
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "graph.yaml").write_text(
+        """
+model:
+  provider: sglang
+  provider_env: MODEL_PROVIDER
+  providers:
+    sglang:
+      name: qwen3-4b
+      name_env: SGLANG_MODEL
+      api_key_env: SGLANG_API_KEY
+      base_url: http://127.0.0.1:30000/v1
+      base_url_env: SGLANG_BASE_URL
+embedding:
+  provider: sglang
+  provider_env: EMBEDDING_PROVIDER
+  providers:
+    sglang:
+      name: text-embedding-v3
+      api_key_env: SGLANG_API_KEY
+      base_url: http://127.0.0.1:30000/v1
+      base_url_env: SGLANG_BASE_URL
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "_find_repo_root", lambda: tmp_path)
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.setenv("SGLANG_MODEL", "qwen-local")
+    monkeypatch.setenv("SGLANG_BASE_URL", "http://127.0.0.1:31000/v1")
+    monkeypatch.setenv("SGLANG_API_KEY", "EMPTY")
+
+    chat_cfg, embedding_cfg = module._load_runtime_configs()
+
+    assert chat_cfg.model == "qwen-local"
+    assert chat_cfg.base_url == "http://127.0.0.1:31000/v1"
+    assert embedding_cfg.model == "text-embedding-v3"
+    assert embedding_cfg.base_url == "http://127.0.0.1:31000/v1"
+
+
 def test_prepare_query_stage_resolves_relative_time_with_worker_time_context(monkeypatch) -> None:
     module = _load_web_search_module()
 

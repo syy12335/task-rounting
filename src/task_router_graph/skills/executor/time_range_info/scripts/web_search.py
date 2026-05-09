@@ -20,6 +20,8 @@ import yaml
 from jsonschema import ValidationError, validate
 from langgraph.graph import END, START, StateGraph
 
+from task_router_graph.provider_config import resolve_provider_value
+
 try:
     from defusedxml import ElementTree as SafeElementTree
 except Exception:  # pragma: no cover
@@ -323,8 +325,8 @@ def _load_runtime_configs() -> tuple[ChatConfig, EmbeddingConfig]:
     model_meta = _resolve_provider_section(graph_cfg, section_name="model")
     model_cfg = model_meta["provider_cfg"]
     model_root = model_meta["section_cfg"]
-    model_name = str(model_cfg.get("name", "")).strip()
-    model_base_url = str(model_cfg.get("base_url", "")).strip()
+    model_name = resolve_provider_value(model_cfg, "name")
+    model_base_url = resolve_provider_value(model_cfg, "base_url")
     if not model_name or not model_base_url:
         raise ValueError("model provider requires name and base_url")
 
@@ -339,8 +341,8 @@ def _load_runtime_configs() -> tuple[ChatConfig, EmbeddingConfig]:
 
     embedding_meta = _resolve_provider_section(graph_cfg, section_name="embedding")
     embedding_cfg = embedding_meta["provider_cfg"]
-    embedding_name = str(embedding_cfg.get("name", "")).strip()
-    embedding_base_url = str(embedding_cfg.get("base_url", "")).strip()
+    embedding_name = resolve_provider_value(embedding_cfg, "name")
+    embedding_base_url = resolve_provider_value(embedding_cfg, "base_url")
     if not embedding_name or not embedding_base_url:
         raise ValueError("embedding provider requires name and base_url")
 

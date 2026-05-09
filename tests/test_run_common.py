@@ -168,3 +168,68 @@ def test_ensure_preferred_provider_falls_back_to_aliyun_when_sglang_cannot_start
     assert model_name == "qwen-flash"
     assert provider_env == "MODEL_PROVIDER"
     assert os.environ["MODEL_PROVIDER"] == "aliyun"
+
+
+def test_ensure_preferred_provider_reports_env_model_name(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "graph.yaml"
+    config_path.write_text(
+        """
+model:
+  provider: sglang
+  provider_env: MODEL_PROVIDER
+  providers:
+    sglang:
+      name: qwen3-4b
+      name_env: SGLANG_MODEL
+      base_url: http://127.0.0.1:30000/v1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.setenv("SGLANG_MODEL", "qwen-local")
+    monkeypatch.setattr(run_common, "SGLANG_AUTO_START", False)
+    monkeypatch.setattr(run_common, "_is_sglang_available", lambda _providers: True)
+
+    provider, model_name, provider_env = run_common.ensure_preferred_provider_and_log(config_path)
+
+    assert provider == "sglang"
+    assert model_name == "qwen-local"
+    assert provider_env == "MODEL_PROVIDER"
+
+
+def test_sglang_availability_uses_base_url_env(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSocket:
+        def __enter__(self) -> "FakeSocket":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_create_connection(address: tuple[str, int], timeout: float) -> FakeSocket:
+        captured["address"] = address
+        captured["timeout"] = timeout
+        return FakeSocket()
+
+    def fake_probe_http(*, base_url: str, api_key: str, timeout_sec: float = 1.5) -> bool:
+        captured["base_url"] = base_url
+        captured["api_key"] = api_key
+        captured["timeout_sec"] = timeout_sec
+        return True
+
+    monkeypatch.setenv("SGLANG_BASE_URL", "http://127.0.0.1:31000/v1")
+    monkeypatch.setattr(run_common.socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(run_common, "_probe_http", fake_probe_http)
+
+    assert run_common._is_sglang_available(
+        {
+            "sglang": {
+                "base_url": "http://127.0.0.1:30000/v1",
+                "base_url_env": "SGLANG_BASE_URL",
+            }
+        }
+    )
+    assert captured["address"] == ("127.0.0.1", 31000)
+    assert captured["base_url"] == "http://127.0.0.1:31000/v1"
