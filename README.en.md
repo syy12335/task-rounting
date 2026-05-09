@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-Environment-Runtime is a task routing runtime for engineering agents. It routes high-certainty tasks to fixed workflows / skills early, leaves low-certainty tasks to a full executor loop, and supports async long-running work with structured result collection.
+Environment-Runtime is a lightweight Agent Runtime for engineering scenarios. As OpenClaw gains more attention in enterprise engineering workflows, a practical need becomes clearer: a general-purpose agent runtime design may not directly cover every engineering deployment pattern. This project narrows the scope to high-certainty engineering workflows and aims to make common engineering tasks easier to organize, reuse, and operate. It is still growing; issues and PRs are welcome.
 
 It is useful when:
 
@@ -23,9 +23,9 @@ It is not a good fit when:
 
 ## Advantages
 
-- **Observed token cost is about 7%**: on a distribution dominated by high-certainty tasks, stable tasks do not need to run through the full agentic loop every time; compared with an OpenClaw-style baseline, the observed cost is about 7%.
-- **Less idle waiting**: long-running tasks can return `running` first and fill results back asynchronously, instead of blocking one synchronous agent turn.
-- **Less room for hallucination**: the controller makes decisions from an explicit Environment view, reducing hidden-context assumptions and invented facts.
+- **Observed token cost is about 7%**: in the current business scenario samples, total token usage is about 7% of directly using OpenClaw. The gain comes from the lightweight runtime design as a whole, including explicit state views, layered routing, workflow / skill execution paths, and asynchronous result collection.
+- **Better fit for async long-running tasks**: long-running tasks can return `running` first and fill results back asynchronously, while the synchronous turn only handles the part that needs an immediate response.
+- **More explicit state grounding**: the controller makes decisions from an explicit Environment view, which makes routing behavior easier to inspect and reproduce.
 - **More reusable engineering paths**: scripts, workflows, and skills can become fixed execution paths over time, while the agent handles routing and failure convergence.
 - **Easier badcase review**: tasks, failures, retries, async collection, and final replies all leave structured traces for locating controller / executor / skill issues.
 
@@ -41,11 +41,11 @@ These benefits depend on task distribution. The more deterministic workflows you
 
 The training side reuses the same entry point: `build_controller_state_input(...)` turns the runtime Environment into `{ USER_INPUT, ENVIRONMENT_JSON, SKILLS_INDEX }`. This keeps training samples and online controller inference aligned on the same state shape, reducing drift between training-time context and runtime context.
 
-### 2. Two-stage interception: choose the execution layer by uncertainty
+### 2. Layered routing: choose the execution layer by uncertainty
 
-General agentic frameworks tend to send every input through a full agentic loop. In engineering workflows, many tasks actually follow fixed execution paths. This README uses testing-related task types as examples only to explain the routing layers; the framework is not limited to testing scenarios.
+Many general agentic frameworks are designed to preserve flexibility for open-ended scenarios. In narrower engineering workflows, however, some tasks follow relatively fixed execution paths. This README uses testing-related task types as examples only to explain the routing layers; the framework is not limited to testing scenarios.
 
-Environment-Runtime splits tasks into multiple execution layers by certainty. The more deterministic the task is, the earlier it exits the expensive LLM path. The controller only handles routing and structured task generation, with `max_steps=3` by default. Only remaining high-uncertainty tasks enter the full executor loop, with `max_steps=4` by default.
+Environment-Runtime splits tasks into multiple execution layers by certainty. The more deterministic the task is, the earlier it can move into a stable workflow / skill path. The controller only handles routing and structured task generation, with `max_steps=3` by default. Only remaining high-uncertainty tasks enter the full executor loop, with `max_steps=4` by default.
 
 ```text
 User input
@@ -65,22 +65,22 @@ User input
     | ThreadPoolExecutor  |     |             |              |
     | async dispatch      |     | no skill    | sync skill   | pyskill
     | returns running     |     | free-form   | script sync  | subprocess
-    | without blocking    |     | highest cost| blocking     | non-blocking
+    | without blocking    |     | flexible    | blocking     | non-blocking
     +---------------------+     +----------------------------+
 ```
 
-The `functest / accutest / perftest` nodes are built-in placeholder task families used to demonstrate low-cost routing for high-certainty tasks. In a real deployment, they should be replaced with your own business task types.
+The `functest / accutest / perftest` nodes are built-in placeholder task families used to demonstrate layered routing for high-certainty tasks. In a real deployment, they should be replaced with your own business task types.
 
-The practical intuition is simple: the more retries and IO-heavy context each run brings in, the larger the cost gap between workflow layers becomes. If a deterministic path can solve the task, leaving the agentic loop earlier is cheaper.
+The practical intuition is simple: the more retries and IO-heavy context each run brings in, the more execution-layer choice matters. Tasks that can be stabilized as workflows can use more deterministic paths, while the full agentic loop remains available for requests that need more flexibility.
 
-Additional LLM cost after controller routing:
+Additional LLM involvement after controller routing:
 
-| Execution layer | Additional LLM cost | Notes |
-|-----------------|---------------------|-------|
+| Execution layer | Additional LLM involvement | Notes |
+|-----------------|----------------------------|-------|
 | Built-in example task types (`functest / accutest / perftest`) | Very low | After controller routing, dispatches directly to `ThreadPoolExecutor`; execution does not enter the executor loop |
 | pyskill (`skill-mode=pyskill`) | Minimal | The LLM only decides whether to start the skill; execution runs asynchronously in a subprocess |
 | sync skill (`skill-mode=sync`) | Low | The LLM selects the skill, then a script performs the execution |
-| free-form executor | Highest | Enters the full executor agentic loop (`max_steps=4` by default) |
+| flexible executor | Full | Enters the full executor agentic loop (`max_steps=4` by default), for higher-uncertainty requests |
 
 ### 3. PySkill: process-level non-blocking execution and idempotent result collection
 
