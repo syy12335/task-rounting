@@ -57,7 +57,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 └──────────────┬──────────────────────────────┬───────────┘
                │                              │
     ┌──────────▼──────────┐         ┌─────────▼──────────┐
-    │ workflow type skill │         │      executor       │
+    │ workflow type task  │         │      executor       │
     │ 示例：functest 等   │         │   需要灵活处理       │
     └──────────┬──────────┘         └─────────┬──────────┘
                │                              │
@@ -69,7 +69,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
     └─────────────────────┘     └────────────────────────────┘
 ```
 
-说明：图中的 `functest / accutest / perftest` 是当前仓库内置的示例 workflow type skill，用于演示高确定性任务的低成本分流路径；实际落地时可新增同格式 controller skill 包来接入你的业务 workflow。
+说明：图中的 `functest / accutest / perftest` 是当前仓库内置的示例 workflow type task，用于演示高确定性任务的低成本分流路径；实际落地时可新增同格式 controller skill 包来接入你的业务 workflow。
 
 核心直觉是：重试越多、每次 IO 带入的上下文越大，workflow 成本差异就越明显；能用确定性路径解决的任务，越早离开 agentic loop 越划算。
 
@@ -79,7 +79,7 @@ Environment-Runtime 的做法是：把任务按确定性拆成多层执行路径
 
 | 执行层 | 额外 LLM 消耗 | 说明 |
 |--------|---------------|------|
-| workflow type skill（示例：`functest / accutest / perftest`） | 极低 | controller 路由后直接 dispatch 到 `ThreadPoolExecutor`，执行阶段不再进入 executor loop |
+| workflow type task（示例：`functest / accutest / perftest`） | 极低 | controller 路由后直接 dispatch 到 `ThreadPoolExecutor`，执行阶段不再进入 executor loop |
 | pyskill（`skill-mode=pyskill`） | 极少 | LLM 只参与“是否启动该 skill”，实际执行由 subprocess 异步完成 |
 | sync skill（`skill-mode=sync`） | 少 | LLM 决策命中 skill，具体执行由脚本完成 |
 | executor 自由发挥 | 最多 | 进入完整 executor agentic loop（默认 `max_steps=4`） |
@@ -206,10 +206,10 @@ python -m pytest
 
 ## 局限性
 
-- token 节省比例依赖确定性任务分布：Controller 一次分流命中的 workflow type skill 越多，节省越明显；README 里用 `functest / accutest / perftest` 作为示例来说明这件事。如果大多数任务都落到 executor，自然收益会变小
+- token 节省比例依赖确定性任务分布：Controller 一次分流命中的 workflow type task 越多，节省越明显；README 里用 `functest / accutest / perftest` 作为示例来说明这件事。如果大多数任务都落到 executor，自然收益会变小
 - pyskill / sync skill 需要人工维护：确定性场景越多，配套脚本也越需要持续演进
 - 评测集规模还小：当前评测依赖 `src/task_router_graph_train/assets/manual_protocol_v1/` 的 `holdout` split，适合机制验证，不代表全量线上分布
-- 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是示例 workflow type skill；迁移到其他工程场景时，需要新增或替换 controller workflow skill 包
+- 业务落地仍需定制：当前 README 里的 `functest / accutest / perftest` 只是示例 workflow type task；迁移到其他工程场景时，需要新增或替换 controller workflow skill 包
 
 ## 文档
 

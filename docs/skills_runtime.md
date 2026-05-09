@@ -69,7 +69,7 @@ paths:
 
 ## 4. Prompt 注入模型
 
-controller / executor 均注入 skill 元数据（而非正文全文）。controller 只注入 workflow type skills；未命中时固定路由到内置 `executor`。
+controller / executor 均注入 skill 元数据（而非正文全文）。controller 只注入 workflow type tasks；未命中时固定路由到内置 `executor`。
 
 - `name`
 - `description`

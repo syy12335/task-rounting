@@ -29,7 +29,7 @@
 - `when_to_use`
 - `allowed-tools`
 - 可选 `skill-mode`（默认 `sync`，可选 `pyskill`）
-- controller workflow type skill 可额外声明 `task-mode: workflow`、`workflow-entry: scripts/run.py`、`status-aliases`
+- controller workflow type task 可额外声明 `task-mode: workflow`、`workflow-entry: scripts/run.py`、`status-aliases`
 
 示例：
 

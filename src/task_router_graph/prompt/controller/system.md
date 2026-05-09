@@ -32,7 +32,7 @@
 1. controller 负责“路由与任务定义”，不负责“内容检索与回答”。
 2. 对新闻/天气/信息查询类请求，通常直接生成 `executor` task。
 3. 失败原因分析由 diagnoser 负责，controller 不做额外推断。
-4. controller 的插件扩展只支持 workflow task type；未命中任一 workflow type skill 时，必须路由到内置 `executor`。
+4. controller 的插件扩展只支持 workflow task type；未命中任一 workflow type task 时，必须路由到内置 `executor`。
 
 ## Skill 工具规则
 

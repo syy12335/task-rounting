@@ -5,7 +5,7 @@
 ## 1. 当前定位
 
 - PySkill 是 `executor` task 的一种执行形态，不是 controller workflow type。
-- `task.type` 仍保持现有语义（`executor` 或已注册 workflow type skill）。
+- `task.type` 仍保持现有语义（`executor` 或已注册 workflow type task）。
 - PySkill 的目标是把长耗时执行从主链路中拆开，并通过 Environment 维持可观测、可回填、可收敛。
 
 ### 关系说明（避免概念混淆）
