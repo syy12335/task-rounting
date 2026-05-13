@@ -11,6 +11,24 @@ from .task import Task
 from .task_record import TaskRecord
 
 
+# ---------------------------------------------------------------------------
+# View trim levels
+# ---------------------------------------------------------------------------
+# L0: no trimming — full track with all fields
+# L1: light — compact long text in `return` fields (default for AI context)
+# L2: aggressive — drop verbose fields (observation, reason), keep only
+#     structured fields + `return`.  Failed tasks are NEVER trimmed to L2.
+# L3: history — only task-level status/result, no track at all (rollup style)
+# ---------------------------------------------------------------------------
+TRIM_LEVEL_NONE = 0
+TRIM_LEVEL_LIGHT = 1
+TRIM_LEVEL_AGGRESSIVE = 2
+TRIM_LEVEL_HISTORY = 3
+
+# Fields dropped at L2 aggressive trim (verbose natural-language text).
+_TRIM_L2_DROP_FIELDS = frozenset({"observation", "reason", "analysis", "reply"})
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -63,12 +81,46 @@ def _compact_text_value(text: str, *, target_tokens: int) -> str:
     )
 
 
-def _compact_track(track: list[dict[str, Any]], *, target_tokens: int) -> list[dict[str, Any]]:
-    compacted: list[dict[str, Any]] = []
+def _safe_target_tokens(value: int | None, default: int = 600) -> int:
+    try:
+        parsed = int(value) if value is not None else int(default)
+    except Exception:
+        parsed = int(default)
+    return max(80, parsed)
+
+
+def _trim_track_for_view(
+    track: list[dict[str, Any]],
+    *,
+    trim_level: int,
+    target_tokens: int,
+    is_failed_task: bool = False,
+) -> list[dict[str, Any]]:
+    """Apply *trim_level* to a cloned track list for AI-context views.
+
+    Failed tasks are protected: they never go below L1 (light compact).
+    """
+    if trim_level <= TRIM_LEVEL_NONE:
+        return _clone_track(track)
+
+    effective_level = trim_level
+    if is_failed_task and effective_level >= TRIM_LEVEL_AGGRESSIVE:
+        effective_level = TRIM_LEVEL_LIGHT
+
+    if effective_level >= TRIM_LEVEL_HISTORY:
+        return []  # history rollup — no track at all
+
+    trimmed: list[dict[str, Any]] = []
     for item in track:
         if not isinstance(item, dict):
             continue
         cloned = copy.deepcopy(item)
+
+        if effective_level >= TRIM_LEVEL_AGGRESSIVE:
+            for field in _TRIM_L2_DROP_FIELDS:
+                cloned.pop(field, None)
+
+        # L1+ : compact the `return` field
         if "return" in cloned:
             return_value = cloned.get("return")
             if isinstance(return_value, (dict, list)):
@@ -76,16 +128,9 @@ def _compact_track(track: list[dict[str, Any]], *, target_tokens: int) -> list[d
             else:
                 return_text = str(return_value)
             cloned["return"] = _compact_text_value(return_text, target_tokens=target_tokens)
-        compacted.append(cloned)
-    return compacted
 
-
-def _safe_target_tokens(value: int | None, default: int = 600) -> int:
-    try:
-        parsed = int(value) if value is not None else int(default)
-    except Exception:
-        parsed = int(default)
-    return max(80, parsed)
+        trimmed.append(cloned)
+    return trimmed
 
 
 @dataclass
@@ -259,9 +304,13 @@ class Environment:
         default_round_limit: int = 5,
         compress: bool = False,
         compress_target_tokens: int | None = None,
+        trim_level: int = TRIM_LEVEL_NONE,
     ) -> dict[str, Any]:
         current_failed_context = self.get_current_failed_task_context()
         previous_failed_context = self.get_last_failed_task_context()
+
+        if compress and trim_level <= TRIM_LEVEL_NONE:
+            trim_level = TRIM_LEVEL_LIGHT
 
         view = self.build_context_view(
             # Keep immediate failed retry behavior: only broaden when current last task is failed.
@@ -270,7 +319,7 @@ class Environment:
             include_task=True,
             include_reply=True,
             include_trace=False,
-            compress=compress,
+            trim_level=trim_level,
             compress_target_tokens=compress_target_tokens,
         )
 
@@ -303,7 +352,7 @@ class Environment:
                 previous_task_payload["result"] = ""
             else:
                 previous_task_payload["result"] = _strip_failure_analysis_suffix(previous_task_payload.get("result", ""))
-            if compress:
+            if trim_level >= TRIM_LEVEL_LIGHT:
                 target = _safe_target_tokens(compress_target_tokens)
                 previous_task_payload["result"] = _compact_text_value(previous_task_payload.get("result", ""), target_tokens=target)
 
@@ -350,8 +399,10 @@ class Environment:
                     for step in task_item.track:
                         agent = str(step.get("agent", "")) if isinstance(step, dict) else ""
                         event = str(step.get("event", step.get("action_kind", ""))) if isinstance(step, dict) else ""
+                        ts = str(step.get("ts", "")) if isinstance(step, dict) else ""
                         reason = str(step.get("reason", "")) if isinstance(step, dict) else ""
-                        lines.append(f"  - agent={agent} event={event} reason={reason}")
+                        ts_display = f" ts={ts}" if ts else ""
+                        lines.append(f"  - agent={agent} event={event}{ts_display} reason={reason}")
 
                         if isinstance(step, dict) and "return" in step:
                             return_value = step.get("return")
@@ -386,9 +437,14 @@ class Environment:
         include_trace: bool = False,
         compress: bool = False,
         compress_target_tokens: int | None = None,
+        trim_level: int = TRIM_LEVEL_NONE,
         history_summary_limit: int = 2,
     ) -> dict[str, Any]:
         self._assert_round_consistency()
+
+        # Backward compat: compress=True maps to TRIM_LEVEL_LIGHT.
+        if compress and trim_level <= TRIM_LEVEL_NONE:
+            trim_level = TRIM_LEVEL_LIGHT
 
         # Default read view for AI: cur_round + visible rounds.
         rounds_payload: list[dict[str, object]] = []
@@ -403,7 +459,7 @@ class Environment:
                 round_payload["user_input"] = round_item.user_input
             if include_reply:
                 reply_value = str(round_item.reply)
-                if compress:
+                if trim_level >= TRIM_LEVEL_LIGHT:
                     reply_value = _compact_text_value(reply_value, target_tokens=target_tokens)
                 round_payload["reply"] = reply_value
             tasks_payload: list[dict[str, object]] = []
@@ -411,14 +467,18 @@ class Environment:
                 item: dict[str, object] = {
                     "task_id": task_item.task_id,
                 }
-                if include_trace:
-                    track_payload = _clone_track(task_item.track)
-                    if compress:
-                        track_payload = _compact_track(track_payload, target_tokens=target_tokens)
+                is_failed = str(task_item.task.status).strip().lower() == "failed"
+                if include_trace and trim_level < TRIM_LEVEL_HISTORY:
+                    track_payload = _trim_track_for_view(
+                        task_item.track,
+                        trim_level=trim_level,
+                        target_tokens=target_tokens,
+                        is_failed_task=is_failed,
+                    )
                     item["track"] = track_payload
                 if include_task:
                     task_payload = task_item.task.to_dict()
-                    if compress:
+                    if trim_level >= TRIM_LEVEL_LIGHT:
                         task_payload["result"] = _compact_text_value(task_payload.get("result", ""), target_tokens=target_tokens)
                     item["task"] = task_payload
                 tasks_payload.append(item)

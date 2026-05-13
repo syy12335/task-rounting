@@ -18,11 +18,22 @@ from .controller_action import (
     validate_controller_action_dict,
     validate_controller_action_payload,
 )
-from .environment import Environment
+from .environment import (
+    TRIM_LEVEL_AGGRESSIVE,
+    TRIM_LEVEL_HISTORY,
+    TRIM_LEVEL_LIGHT,
+    TRIM_LEVEL_NONE,
+    Environment,
+)
 from .output import Output
 from .round_record import RoundRecord
 from .task import Task
 from .task_record import TaskRecord
+from .track_event import (
+    TrackEvent,
+    TrackEventBase,
+    get_return_schema,
+)
 
 __all__ = [
     "ControllerAction",
@@ -39,6 +50,13 @@ __all__ = [
     "RoundRecord",
     "Environment",
     "Output",
+    "TrackEvent",
+    "TrackEventBase",
+    "TRIM_LEVEL_NONE",
+    "TRIM_LEVEL_LIGHT",
+    "TRIM_LEVEL_AGGRESSIVE",
+    "TRIM_LEVEL_HISTORY",
+    "get_return_schema",
     "to_dict",
     "validate_controller_action_dict",
     "validate_controller_action_payload",

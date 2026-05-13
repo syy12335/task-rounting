@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .controller_action import ControllerAction
@@ -18,8 +18,8 @@ def _safe_int(value: Any, default: int = 0) -> int:
 class TaskRecord:
     # round 内的单任务记录：完整轨迹 -> 执行任务。
     task_id: int
-    track: list[dict[str, Any]]
-    task: Task
+    track: list[dict[str, Any]] = field(default_factory=list)
+    task: Task = field(default_factory=lambda: Task(type="executor", content="", status="pending", result=""))
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TaskRecord":
