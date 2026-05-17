@@ -123,23 +123,6 @@ _OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 CONTROLLER_ALLOWED_ACTION_KINDS = ("observe", "generate_task")
-_OBSERVE_SHOW_ENVIRONMENT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action_kind": {"const": "observe"},
-        "tool": {"const": "show_environment"},
-        "args": {
-            "type": "object",
-            "properties": {
-                "show_trace": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        },
-        "reason": {"type": "string", "minLength": 1},
-    },
-    "required": ["action_kind", "tool", "args", "reason"],
-    "additionalProperties": False,
-}
 
 CONTROLLER_ALLOWED_OBSERVE_TOOLS = (
     "read",
@@ -147,7 +130,6 @@ CONTROLLER_ALLOWED_OBSERVE_TOOLS = (
     "build_context_view",
     "previous_failed_track",
     "beijing_time",
-    "show_environment",
     TOOL_SKILL_TOOL,
 )
 CONTROLLER_ALLOWED_TASK_TYPES = ("executor",)
@@ -182,7 +164,6 @@ def build_controller_action_schema(task_types: tuple[str, ...] | list[str] | Non
             _OBSERVE_BUILD_VIEW_SCHEMA,
             _OBSERVE_PREVIOUS_FAILED_TRACK_SCHEMA,
             _OBSERVE_BEIJING_TIME_SCHEMA,
-            _OBSERVE_SHOW_ENVIRONMENT_SCHEMA,
             _OBSERVE_SKILL_TOOL_SCHEMA,
             {
                 "type": "object",
@@ -218,7 +199,6 @@ def build_controller_output_constraints(task_types: tuple[str, ...] | list[str] 
             "build_context_view": [],
             "previous_failed_track": [],
             "beijing_time": [],
-            "show_environment": [],
             TOOL_SKILL_TOOL: [ARG_NAME, ARG_INPUT],
         },
     }

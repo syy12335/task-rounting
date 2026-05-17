@@ -478,10 +478,6 @@ def _build_observe_tools(
         "beijing_time": lambda **kwargs: _tool_beijing_time(
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"})
         ),
-        "show_environment": lambda **kwargs: _tool_show_environment(
-            environment=environment,
-            **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"}),
-        ),
         TOOL_SKILL_TOOL: lambda **kwargs: _tool_skill_tool(
             skill_runtime=skill_runtime,
             **_sanitize_tool_kwargs(kwargs, reserved={"workspace_root", "environment", "skill_runtime"}),

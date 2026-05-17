@@ -81,6 +81,21 @@ def _compact_text_value(text: str, *, target_tokens: int) -> str:
     )
 
 
+def _compact_return_value(value: Any, *, target_tokens: int) -> Any:
+    """Compact long strings inside a structured return payload.
+
+    Preserves the original dict/list structure and only compacts string
+    leaf values that exceed the token budget.
+    """
+    if isinstance(value, dict):
+        return {k: _compact_return_value(v, target_tokens=target_tokens) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_compact_return_value(item, target_tokens=target_tokens) for item in value]
+    if isinstance(value, str):
+        return _compact_text_value(value, target_tokens=target_tokens)
+    return value
+
+
 def _safe_target_tokens(value: int | None, default: int = 600) -> int:
     try:
         parsed = int(value) if value is not None else int(default)
@@ -120,14 +135,9 @@ def _trim_track_for_view(
             for field in _TRIM_L2_DROP_FIELDS:
                 cloned.pop(field, None)
 
-        # L1+ : compact the `return` field
+        # L1+ : compact the `return` field (preserve dict/list structure)
         if "return" in cloned:
-            return_value = cloned.get("return")
-            if isinstance(return_value, (dict, list)):
-                return_text = json.dumps(return_value, ensure_ascii=False)
-            else:
-                return_text = str(return_value)
-            cloned["return"] = _compact_text_value(return_text, target_tokens=target_tokens)
+            cloned["return"] = _compact_return_value(cloned.get("return"), target_tokens=target_tokens)
 
         trimmed.append(cloned)
     return trimmed
@@ -468,7 +478,7 @@ class Environment:
                     "task_id": task_item.task_id,
                 }
                 is_failed = str(task_item.task.status).strip().lower() == "failed"
-                if include_trace and trim_level < TRIM_LEVEL_HISTORY:
+                if include_trace:
                     track_payload = _trim_track_for_view(
                         task_item.track,
                         trim_level=trim_level,
