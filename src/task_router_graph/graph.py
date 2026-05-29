@@ -9,6 +9,10 @@ import json
 from threading import Lock
 from typing import Any, Callable, Literal
 
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 import yaml
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
@@ -298,6 +302,7 @@ class TaskRouterGraph:
                     {
                         "agent": "graph",
                         "event": "status_shortcut",
+                        "ts": _now_iso(),
                         "task_status": summary_task.status,
                         "task_result": summary_task.result,
                         "return": {
@@ -371,6 +376,7 @@ class TaskRouterGraph:
                 {
                     "agent": "reply",
                     "event": "retry_reply",
+                    "ts": _now_iso(),
                     "task_status": "retrying",
                     "task_result": "",
                     "return": {
@@ -433,6 +439,7 @@ class TaskRouterGraph:
                 {
                     "agent": "graph",
                     "event": "workflow_route_failed",
+                    "ts": _now_iso(),
                     "workflow_type": task_type,
                     "task_status": task.status,
                     "task_result": task.result,
@@ -526,6 +533,7 @@ class TaskRouterGraph:
                 track_item={
                     "agent": "graph",
                     "event": "reply_completion_patch",
+                    "ts": _now_iso(),
                     "return": {
                         "workflow_events_count": len(recent_workflow_events),
                         "reply": patched_reply,
@@ -628,6 +636,7 @@ class TaskRouterGraph:
                 {
                     "agent": "pyskill",
                     "event": "workflow_skip",
+                    "ts": _now_iso(),
                     "workflow_type": workflow_type,
                     "task_status": task.status,
                     "task_result": task.result,
@@ -670,6 +679,7 @@ class TaskRouterGraph:
             {
                 "agent": "pyskill",
                 "event": "dispatch_pyskill",
+                "ts": _now_iso(),
                 "workflow_type": workflow_type,
                 "task_status": task.status,
                 "task_result": task.result,
@@ -865,6 +875,7 @@ class TaskRouterGraph:
                     {
                         "agent": "pyskill",
                         "event": "link_pyskill_result",
+                        "ts": _now_iso(),
                         "run_id": run_id,
                         "task_status": task_item.task.status,
                         "task_result": task_item.task.result,
@@ -918,6 +929,7 @@ class TaskRouterGraph:
                 {
                     "agent": "pyskill",
                     "event": completion_event,
+                    "ts": _now_iso(),
                     "workflow_type": str(workflow_type).strip() or "pyskill",
                     "run_id": run_id_value,
                     "pid": int(pid or 0),

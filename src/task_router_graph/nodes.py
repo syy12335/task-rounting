@@ -7,6 +7,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 from .protocol_constants import (
     ARG_INPUT,
     ARG_NAME,
@@ -204,6 +208,10 @@ def _tool_build_context_view(
 
 def _tool_previous_failed_track(*, environment: Environment, **_: Any) -> str:
     return _json_dump(environment.get_previous_failed_track_view())
+
+
+def _tool_show_environment(*, environment: Environment, show_trace: Any = False, **_: Any) -> str:
+    return environment.show_environment(show_trace=_to_bool(show_trace))
 
 
 class SkillToolRuntime:
@@ -522,11 +530,16 @@ def _try_skip_execute(task: Task, *, stage: str) -> tuple[Task, str] | None:
 
 def _controller_trace_to_track(controller_trace: list[ControllerAction]) -> list[dict[str, Any]]:
     track: list[dict[str, Any]] = []
+    ts = _now_iso()
     for action in controller_trace:
         item = action.to_dict()
         item["agent"] = "controller"
+        item["ts"] = ts
 
         action_kind = str(item.get("action_kind", "")).strip().lower()
+        # Unify event field — all track items now carry `event` as canonical event-type key.
+        item["event"] = action_kind
+
         if action_kind == "observe":
             item["return"] = str(item.get("observation", "")).strip()
         elif action_kind == "generate_task":
@@ -546,6 +559,7 @@ def _build_executor_track(*, executor: str, event: str, task: Task) -> list[dict
         {
             "agent": executor,
             "event": event,
+            "ts": _now_iso(),
             "task_status": task_status,
             "task_result": task_result,
             "return": {
@@ -911,6 +925,7 @@ def executor_node(
             {
                 "agent": "executor",
                 "event": "delegate_skill",
+                "ts": _now_iso(),
                 "skill_name": skill_name,
                 "tool_name": tool_name,
                 "args": {"input": input_payload if isinstance(input_payload, dict) else {}},
@@ -943,6 +958,7 @@ def executor_node(
                 {
                     "agent": "pyskill",
                     "event": "dispatch_pyskill",
+                    "ts": _now_iso(),
                     "workflow_type": str(dispatch_payload.get("workflow_type", "pyskill")).strip() or "pyskill",
                     "run_id": run_id,
                     "pid": pid,
@@ -958,6 +974,7 @@ def executor_node(
                 {
                     "agent": "pyskill",
                     "event": "dispatch_pyskill_failed",
+                    "ts": _now_iso(),
                     "workflow_type": str(dispatch_payload.get("workflow_type", "pyskill")).strip() or "pyskill",
                     "task_status": task.status,
                     "task_result": task.result,
@@ -982,6 +999,7 @@ def executor_node(
             {
                 "agent": "pyskill",
                 "event": "dispatch_pyskill",
+                "ts": _now_iso(),
                 "workflow_type": str(pyskill_dispatch.get("workflow_type", "pyskill")).strip() or "pyskill",
                 "run_id": run_id,
                 "pid": pid,
@@ -1048,6 +1066,7 @@ def failure_diagnosis_node(
     analyzer_track = {
         "agent": "diagnoser",
         "event": "analyze",
+        "ts": _now_iso(),
         "task_status": "failed",
         "task_result": merged_result,
         "analysis": analysis,
@@ -1116,6 +1135,7 @@ def reply_node(
         track_item={
             "agent": "reply",
             "event": "compose",
+            "ts": _now_iso(),
             "task_status": task_status,
             "task_result": task_result,
             "reply": reply,
@@ -1192,6 +1212,7 @@ def _build_executor_trace(observations: Any) -> list[dict[str, Any]]:
         return []
 
     trace: list[dict[str, Any]] = []
+    ts = _now_iso()
     for item in observations:
         if not isinstance(item, dict):
             continue
@@ -1205,6 +1226,7 @@ def _build_executor_trace(observations: Any) -> list[dict[str, Any]]:
             {
                 "agent": "executor",
                 "event": "observe",
+                "ts": ts,
                 "tool": tool_name,
                 "args": args,
                 "reason": reason,

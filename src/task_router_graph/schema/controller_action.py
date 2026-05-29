@@ -123,6 +123,7 @@ _OBSERVE_SKILL_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 CONTROLLER_ALLOWED_ACTION_KINDS = ("observe", "generate_task")
+
 CONTROLLER_ALLOWED_OBSERVE_TOOLS = (
     "read",
     "ls",

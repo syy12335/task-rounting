@@ -45,34 +45,47 @@ route(controller_trace)
 - failure diagnose 通过 `annotate_last_failed_task(..., analyzer_track=...)` 追加 `diagnoser` 记录。
 - reply 通过 `append_last_task_track(...)` 追加 `reply` 记录。
 
-## 3. 常见 Track Item
+## 3. 稳定字段约定
 
-### 3.1 Controller observe
+每个 track item 是一个 flat dict。以下字段是跨事件类型的稳定约定：
 
-controller observe 会保留工具调用参数、原因、观察结果，并把 `observation` 复制到统一的 `return` 字段：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent` | str | 是 | 生产者标识：controller / executor / pyskill / diagnoser / reply / graph |
+| `event` | str | 是 | 事件类型：observe / execute / compose / analyze / dispatch_pyskill / ... |
+| `ts` | str | 否 | ISO-8601 UTC 时间戳，事件生成时间 |
+| `return` | any | 是 | 归一化输出契约。结构化事件为 dict，观测文本为 str |
+
+> **兼容说明**：controller 事件同时保留 `action_kind` 字段（值与 `event` 相同），旧代码可继续使用 `action_kind`，新代码统一使用 `event`。
+
+类型定义见 `src/task_router_graph/schema/track_event.py`，包含每种事件的 TypedDict 和 `return` 字段的预期 schema。可通过 `get_return_schema(agent, event)` 查询。
+
+## 4. 事件类型目录
+
+### 4.1 Controller observe
 
 ```json
 {
   "agent": "controller",
+  "event": "observe",
   "action_kind": "observe",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "tool": "build_context_view",
-  "args": {
-    "round_limit": 3
-  },
+  "args": {"round_limit": 3},
   "reason": "需要了解当前任务状态",
   "observation": "...",
   "return": "..."
 }
 ```
 
-### 3.2 Controller generate_task
-
-controller 生成 task 时，`return` 只保留 task type 和 task content：
+### 4.2 Controller generate_task
 
 ```json
 {
   "agent": "controller",
+  "event": "generate_task",
   "action_kind": "generate_task",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "task_type": "executor",
   "task_content": "用户目标：...\n任务限制：...",
   "reason": "...",
@@ -83,31 +96,27 @@ controller 生成 task 时，`return` 只保留 task type 和 task content：
 }
 ```
 
-### 3.3 Executor observe
-
-executor 每次工具调用会被归一化成 `event=observe`。落盘 track 不保留内部 `observation_raw`，只保留裁剪后的工具结果到 `return`：
+### 4.3 Executor observe
 
 ```json
 {
   "agent": "executor",
   "event": "observe",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "tool": "read",
-  "args": {
-    "path": "src/task_router_graph/skills/executor/xxx/SKILL.md"
-  },
+  "args": {"path": "src/task_router_graph/skills/executor/xxx/SKILL.md"},
   "reason": "...",
   "return": "..."
 }
 ```
 
-### 3.4 Executor execute
-
-executor 完成或跳过执行时，会追加一条摘要事件：
+### 4.4 Executor execute / skip
 
 ```json
 {
   "agent": "executor",
   "event": "execute",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "task_status": "done",
   "task_result": "...",
   "return": {
@@ -117,16 +126,34 @@ executor 完成或跳过执行时，会追加一条摘要事件：
 }
 ```
 
-`functest_async_workflow`、`accutest_async_workflow`、`perftest_async_workflow` 也复用同一类摘要结构，`agent` 和 `event` 会换成对应 workflow 名称与阶段。
+### 4.5 Executor delegate_skill
 
-### 3.5 PySkill dispatch
+```json
+{
+  "agent": "executor",
+  "event": "delegate_skill",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
+  "skill_name": "xxx",
+  "tool_name": "yyy",
+  "args": {"input": {...}},
+  "reason": "...",
+  "task_status": "running",
+  "task_result": "正在执行",
+  "return": {
+    "skill_name": "xxx",
+    "tool_name": "yyy",
+    "input": {...}
+  }
+}
+```
 
-当 executor 命中 `skill-mode=pyskill`，会追加 dispatch 记录：
+### 4.6 PySkill dispatch / completion
 
 ```json
 {
   "agent": "pyskill",
   "event": "dispatch_pyskill",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "workflow_type": "pyskill",
   "run_id": "pyskill:a1b2c3...",
   "pid": 12345,
@@ -140,14 +167,55 @@ executor 完成或跳过执行时，会追加一条摘要事件：
 }
 ```
 
-### 3.6 Diagnoser analyze
+```json
+{
+  "agent": "pyskill",
+  "event": "workflow_complete",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
+  "workflow_type": "pyskill",
+  "run_id": "pyskill:a1b2c3...",
+  "pid": 12345,
+  "source_round_id": 1,
+  "source_task_id": 1,
+  "task_status": "done",
+  "task_result": "...",
+  "return": {
+    "workflow_type": "pyskill",
+    "task_status": "done",
+    "task_result": "...",
+    "run_id": "pyskill:a1b2c3...",
+    "pid": 12345
+  }
+}
+```
 
-失败诊断会读取失败 task 的完整 track，生成分析后追加：
+### 4.7 PySkill link_pyskill_result
+
+```json
+{
+  "agent": "pyskill",
+  "event": "link_pyskill_result",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
+  "run_id": "pyskill:a1b2c3...",
+  "task_status": "done",
+  "task_result": "pyskill_task(round_id=1, task_id=2)",
+  "return": {
+    "run_id": "pyskill:a1b2c3...",
+    "source_round_id": 1,
+    "source_task_id": 1,
+    "pyskill_round_id": 1,
+    "pyskill_task_id": 2
+  }
+}
+```
+
+### 4.8 Diagnoser analyze
 
 ```json
 {
   "agent": "diagnoser",
   "event": "analyze",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "task_status": "failed",
   "task_result": "...",
   "analysis": "失败原因是...",
@@ -158,14 +226,13 @@ executor 完成或跳过执行时，会追加一条摘要事件：
 }
 ```
 
-### 3.7 Reply compose
-
-最终回复会追加到当前最后一条 task：
+### 4.9 Reply compose / retry
 
 ```json
 {
   "agent": "reply",
   "event": "compose",
+  "ts": "2026-05-13T08:30:00.123456+00:00",
   "task_status": "done",
   "task_result": "...",
   "reply": "你的任务已完成，结果是...",
@@ -177,15 +244,23 @@ executor 完成或跳过执行时，会追加一条摘要事件：
 }
 ```
 
-## 4. 关键设计
+### 4.10 Graph infrastructure events
 
-### 4.1 Track item 只追加、不回写
+- `status_shortcut` (agent="graph") — 状态追问快捷汇总
+- `workflow_route_failed` (agent="graph") — workflow 路由失败
+- `reply_completion_patch` (agent="graph") — 回复补丁
+- `workflow_skip` (agent="pyskill") — workflow 跳过
+- `dispatch_pyskill_failed` (agent="pyskill") — 分发失败
+
+## 5. 关键设计
+
+### 5.1 Track item 只追加、不回写
 
 `Environment.add_task(...)`、`append_last_task_track(...)` 和 `annotate_last_failed_task(...)` 都使用副本写入或追加。已有 track item 不会被原地修改。
 
 需要注意：failure diagnose 会更新失败 task 的 `task.result`，但这是 task 状态修正，不是修改历史 track item。
 
-### 4.2 Track 对 controller 默认不可见
+### 5.2 Track 对 controller 默认不可见
 
 默认 context view 不带 trace：
 
@@ -199,12 +274,6 @@ environment.build_context_view(include_trace=False)
 environment.build_context_view(include_trace=True)
 ```
 
-或者通过工具读取最近失败任务的完整轨迹：
-
-```python
-previous_failed_track {}
-```
-
 `build_context_view` 的工具入口还会限制视图大小：
 
 ```python
@@ -212,31 +281,93 @@ MAX_OBSERVATION_VIEW_TASKS = 20
 MAX_OBSERVATION_VIEW_WITH_TRACE_TASKS = 5
 ```
 
-也就是说，带 trace 的视图会被收得更窄，避免把低密度执行日志自动灌进 controller 上下文。controller 想看失败轨迹，应该显式调用 `previous_failed_track`。
+也就是说，带 trace 的视图会被收得更窄，避免把低密度执行日志自动灌进 controller 上下文。
 
-### 4.3 Track 支撑同 round 的隐式状态共享
+### 5.3 Track 支撑同 round 的隐式状态共享
 
-`_build_round_skill_read_context(...)` 会在 executor 执行前扫描当前 round 内已有 task 的 track：
-
-```python
-for task_item in round_item.tasks:
-    for step in task_item.track:
-        if step.get("tool") != "read":
-            continue
-        path = step["args"].get("path")
-        if Path(path).name == "SKILL.md":
-            ...
-```
-
-只要某个 executor 在当前 round 里读过某个 `SKILL.md`，后续 executor 就能通过 `round_skill_reads` 感知这件事，避免重复读取同一个 skill 文件。
+`_build_round_skill_read_context(...)` 会在 executor 执行前扫描当前 round 内已有 task 的 track，避免重复读取同一个 skill 文件。
 
 这也是 `track` 不只是日志的原因：它还承担了 agent 间低耦合的执行事实传递。
 
-## 5. 使用约束
+### 5.4 失败任务 track 受裁剪保护
+
+失败任务的 track 在视图中不会被裁剪到 L1 以下。排障时可以确信失败任务保留了完整的事件结构。
+
+## 6. 视图裁剪策略
+
+`build_context_view()` 支持 `trim_level` 参数，控制 AI 上下文中 track 数据的裁剪程度：
+
+| 级别 | 常量 | 行为 | 适用场景 |
+|------|------|------|----------|
+| L0 | `TRIM_LEVEL_NONE` | 不裁剪，完整 track | 排障调试、持久化 |
+| L1 | `TRIM_LEVEL_LIGHT` | 压缩 `return` 中的长文本（保留 head+tail，中段替换为 `[COMPACTED_VIEW]`） | AI 上下文窗口（默认） |
+| L2 | `TRIM_LEVEL_AGGRESSIVE` | 删除 `observation`/`reason`/`analysis`/`reply` 等冗余文本字段，仅保留结构化字段和 `return` | 高密度上下文窗口 |
+| L3 | `TRIM_LEVEL_HISTORY` | 不携带 track，仅保留 task 级状态 | 历史回滚摘要 |
+
+**裁剪保护规则**：
+- 失败任务（`task.status == "failed"`）的 track 最低裁剪到 L1，不会被 L2/L3 裁剪。
+- `return` 字段始终保留（它本身就是摘要契约）。
+- 历史回滚（L3）由 `_rollup_environment_if_needed()` 触发，与其他裁剪级别独立。
+
+使用示例：
+
+```python
+from src.task_router_graph.schema import TRIM_LEVEL_LIGHT, TRIM_LEVEL_AGGRESSIVE
+
+# AI 上下文：轻量裁剪
+view = environment.build_context_view(include_trace=True, trim_level=TRIM_LEVEL_LIGHT)
+
+# 排障：不裁剪
+view = environment.build_context_view(include_trace=True, trim_level=TRIM_LEVEL_NONE)
+```
+
+向后兼容：`compress=True` 等价于 `trim_level=TRIM_LEVEL_LIGHT`。
+
+## 7. 排障读取入口
+
+### 7.1 三级入口
+
+| 级别 | 入口 | 用途 | 展示内容 |
+|------|------|------|----------|
+| 快速诊断 | `previous_failed_track` 工具 | 运行时自动排障 | 最近失败任务的**完整** track |
+| 上下文排查 | `build_context_view(include_trace=True)` 工具 | Controller 深度排查 | 最近 5 个任务（带 track，默认 L0） |
+| 终端调试 | `show_environment(show_trace=True)` 工具 | 人工 CLI 调试 | 全量 Environment 文本转储（含 ts） |
+| 离线分析 | `var/runs/*/environment.json` | 事后分析 | 完整持久化数据（`to_dict(include_trace=True)`） |
+
+### 7.2 排障路径示例
+
+**场景 A：当前轮任务失败，需要看 controller 做了什么**
+
+```
+1. previous_failed_track {}  → 获取失败任务完整 track
+2. 检查 track 中 agent="controller" 的事件，看 observe 步骤和最终 generate_task
+3. 如果 controller 信息不足，用 build_context_view(include_trace=True, round_limit=3) 扩大上下文
+```
+
+**场景 B：Executor 工具调用返回异常**
+
+```
+1. previous_failed_track {}  → 获取失败任务 track
+2. 定位 agent="executor", event="observe" 的事件
+3. 检查 tool 名称、args 参数、return 内容
+4. 对比前一个 controller observe 步骤，看是否有矛盾信息
+```
+
+**场景 C：PySkill 异步任务未完成**
+
+```
+1. show_environment(show_trace=True)  → 终端查看全量状态
+2. 搜索 event="dispatch_pyskill" 找 run_id
+3. 搜索相同 run_id 的 event="workflow_complete" 或 "workflow_fail"
+4. 如果不存在完成事件，说明任务仍在执行或进程已死
+```
+
+## 8. 使用约束
 
 1. 读执行历史时，优先把 `return` 当成该步的归一化输出。
-2. 不要假设所有 track item 都有同一组字段；不同 agent 的事件结构不同。
+2. 所有新代码统一使用 `event` 字段（非 `action_kind`）。
 3. controller 默认不要带 trace 观察全局环境；需要排障时再显式读取。
 4. 新增 agent 或节点时，优先追加结构化 `return`，避免只写自然语言日志。
 5. `track` 可以用于复盘和局部状态共享，但不应替代 Environment 的正式 task/status/result 字段。
-
+6. 排障时失败任务的 track 不会被裁剪，可以放心依赖其完整性。
+7. 离线分析从 `var/runs/*/environment.json` 入手，数据最完整。
