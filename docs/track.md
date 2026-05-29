@@ -331,7 +331,7 @@ view = environment.build_context_view(include_trace=True, trim_level=TRIM_LEVEL_
 |------|------|------|----------|
 | 快速诊断 | `previous_failed_track` 工具 | 运行时自动排障 | 最近失败任务的**完整** track |
 | 上下文排查 | `build_context_view(include_trace=True)` 工具 | Controller 深度排查 | 最近 5 个任务（带 track，默认 L0） |
-| 终端调试 | `show_environment(show_trace=True)` 工具 | 人工 CLI 调试 | 全量 Environment 文本转储（含 ts） |
+| 终端调试 | `Environment.show_environment(show_trace=True)` / `environment-runtime-show` | 人工 CLI 调试 | 全量 Environment 文本转储（含 ts） |
 | 离线分析 | `var/runs/*/environment.json` | 事后分析 | 完整持久化数据（`to_dict(include_trace=True)`） |
 
 ### 7.2 排障路径示例
@@ -356,7 +356,7 @@ view = environment.build_context_view(include_trace=True, trim_level=TRIM_LEVEL_
 **场景 C：PySkill 异步任务未完成**
 
 ```
-1. show_environment(show_trace=True)  → 终端查看全量状态
+1. 通过 `Environment.show_environment(show_trace=True)` 或 `environment-runtime-show` 终端查看全量状态
 2. 搜索 event="dispatch_pyskill" 找 run_id
 3. 搜索相同 run_id 的 event="workflow_complete" 或 "workflow_fail"
 4. 如果不存在完成事件，说明任务仍在执行或进程已死

@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
+.DS_Store
 
 # Jupyter
 .ipynb_checkpoints/

@@ -210,10 +210,6 @@ def _tool_previous_failed_track(*, environment: Environment, **_: Any) -> str:
     return _json_dump(environment.get_previous_failed_track_view())
 
 
-def _tool_show_environment(*, environment: Environment, show_trace: Any = False, **_: Any) -> str:
-    return environment.show_environment(show_trace=_to_bool(show_trace))
-
-
 class SkillToolRuntime:
     def __init__(self, *, workspace_root: Path, skill_catalog: dict[str, dict[str, Any]], timeout_sec: int = DEFAULT_SKILL_TOOL_TIMEOUT_SEC) -> None:
         self.workspace_root = workspace_root.resolve()
